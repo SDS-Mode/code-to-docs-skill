@@ -281,14 +281,39 @@ Use diagrams to communicate structure and flow that prose handles poorly. Do not
 - Use consistent aliases within a diagram. If a component is `ContainerRuntime` in the diagram, do not call it `Runtime` in the labels.
 - Prefer `sequenceDiagram` for the Intermediate audience level when describing module interactions with 3 or more steps.
 - Diagrams are placed inside fenced code blocks with the `mermaid` language tag. No other content goes inside the block.
+- **Never force `theme: 'dark'`.** Begin every diagram with `%%{init: {'theme':'base', …}}%%` so it renders on both light and dark surfaces (Obsidian themes, GitHub light/dark). A hard-coded dark theme is unreadable on a light background and vice versa.
+- **Color must carry meaning, never decorate.** Add fills only when they encode a real dimension — model tier, module role, or node kind (input/output/state). A diagram where every box is a different color "for looks" is noise; if nothing is being encoded, leave nodes unstyled.
+- **When you color, use light fills with dark text** (palette below) so each box is legible on any surface — the fill supplies its own light background regardless of theme. Keep edges a recessive mid-gray and give edge labels a solid background.
+- **Add a one-line legend** (a caption under the diagram, or a small `subgraph` key) whenever color encodes meaning, so identity is never conveyed by color alone.
 
-**Example — dependency graph:**
+**Styling & color (light/dark-safe).** Reuse this init directive and `classDef` palette so diagrams stay consistent and legible in both themes. The three tier colors mirror the model tiers (Haiku / Sonnet / Opus); `io` / `state` / `plain` cover structural nodes.
+
+```
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
+```
+
+| classDef | fill | stroke | Use for |
+|----------|------|--------|---------|
+| `haiku` | `#eaf2fd` | `#2a78d6` (blue) | Haiku tier — extraction / mechanical nodes |
+| `sonnet` | `#e6f6ef` | `#1baf7a` (green) | Sonnet tier — narrative nodes |
+| `opus` | `#efecfa` | `#4a3aa7` (violet) | Opus tier — reasoning / synthesis nodes |
+| `state` | `#e6f6ef` | `#1baf7a` | The state file / shared data store |
+| `io` | `#ffffff` | `#52514e` | Inputs and outputs (codebase, vault) |
+| `plain` | `#f1f1ef` | `#b9b9b3` | Neutral / orchestrator / structural |
+
+Every class uses `color:#0b0b0b` (dark text). Declare only the classes a diagram actually uses.
+
+**Example — dependency graph (styled):**
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
 graph TD
-    A[ContainerRuntime] -->|uses| B[DockerClient]
-    A -->|reads| C[EnvironmentConfig]
-    B -->|calls| D[podman CLI]
+    RT["Container Runtime"]:::plain -->|uses| DC["Docker Client"]:::plain
+    RT -->|reads| ENV["Environment Config"]:::state
+    DC -->|calls| CLI["podman CLI"]:::io
+    classDef plain fill:#f1f1ef,stroke:#b9b9b3,color:#0b0b0b
+    classDef state fill:#e6f6ef,stroke:#1baf7a,color:#0b0b0b
+    classDef io fill:#ffffff,stroke:#52514e,color:#0b0b0b
 ```
 
 **Example — sequence diagram:**
@@ -316,10 +341,11 @@ The `Health/` directory contains three files that assess codebase quality. These
 
 The hub page for codebase health. Contains:
 
-1. **Severity breakdown** — Mermaid pie chart showing issue distribution by severity
+1. **Severity breakdown** — Mermaid pie chart, colored by severity via the status palette (High = critical red, Medium = warning amber, Low = good green). Declare slices High → Medium → Low so the `pie1`/`pie2`/`pie3` colors line up; `showData` prints the counts.
 
 ```mermaid
-pie title Issues by Severity
+%%{init: {'theme':'base','themeVariables':{'pie1':'#d03b3b','pie2':'#fab219','pie3':'#0ca30c','pieStrokeColor':'#ffffff','pieOuterStrokeColor':'#c3c2b7'}}}%%
+pie showData title Issues by Severity
     "High" : 3
     "Medium" : 7
     "Low" : 4

@@ -3,83 +3,55 @@
 A Claude Code skill that analyzes codebases and generates Obsidian-native documentation vaults with architecture diagrams, API references, codebase health assessments, and teaching-focused explanations at three audience levels. Supports a full development lifecycle: digest existing docs at session start, code, then update docs at session end.
 
 ```mermaid
-%%{init: {'theme': 'dark', 'themeVariables': { 'fontSize': '14px' }}}%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
 flowchart TB
-    subgraph INPUT["  Codebase  "]
-        direction TB
-        SRC["Source Code"]
-        CFG["Config & Manifests"]
-    end
-
-    subgraph PHASE1["  Phase 1 — Analysis  "]
-        direction TB
-        SURVEY["Survey & Module ID"]
-        P1["Pass 1: Extract<br/><i>Haiku × N modules</i>"]
-        P2["Pass 2: Issues<br/><i>Sonnet / Opus × N</i>"]
-        SYN["Synthesize<br/><i>Orchestrator or Opus</i>"]
-        SURVEY --> P1
-        P1 --> P2
-        P2 --> SYN
-    end
-
-    subgraph PHASE2["  Phase 2 — Generation  "]
-        direction TB
-        ARCH["Architecture<br/><i>Sonnet + Haiku</i>"]
-        MODS["Module Docs<br/><i>Sonnet × N</i>"]
-        HEALTH["Health Reports<br/><i>Sonnet + Haiku</i>"]
-        EXTRAS["Patterns · Onboarding<br/>Cross-Cutting<br/><i>Sonnet (full mode)</i>"]
-    end
-
-    subgraph PHASE3["  Phase 3 — Verify  "]
-        VER["Wikilinks + Frontmatter<br/><i>Haiku</i>"]
-    end
-
-    subgraph OUTPUT["  Obsidian Vault  "]
-        direction TB
-        VAULT["docs-vault/"]
-    end
-
-    subgraph LIFECYCLE["  Development Lifecycle  "]
-        direction LR
-        DIGEST[":digest<br/><i>Load context</i>"]
-        CODE["Code"]
-        UPDATE[":update<br/><i>Sync changes</i>"]
-        DIGEST --> CODE --> UPDATE
-        UPDATE -. "git diff<br/>re-analyze" .-> PHASE1
-    end
-
-    INPUT --> PHASE1
-    SYN --> PHASE2
-    ARCH & MODS & HEALTH & EXTRAS --> PHASE3
-    VER --> OUTPUT
-    VAULT -. "read-only" .-> DIGEST
-
-    style INPUT fill:#1a1a2e,stroke:#4a9eff,color:#fff
-    style PHASE1 fill:#16213e,stroke:#4a9eff,color:#fff
-    style PHASE2 fill:#1a1a2e,stroke:#ff6b35,color:#fff
-    style PHASE3 fill:#16213e,stroke:#ffd93d,color:#fff
-    style OUTPUT fill:#1a1a2e,stroke:#7c3aed,color:#fff
-    style LIFECYCLE fill:#0f3460,stroke:#4a9eff,color:#fff,stroke-dasharray: 5 5
-    style SRC fill:#4a9eff,color:#fff
-    style CFG fill:#4a9eff,color:#fff
-    style SURVEY fill:#2d4a7a,color:#fff
-    style P1 fill:#2d4a7a,color:#fff
-    style P2 fill:#2d4a7a,color:#fff
-    style SYN fill:#2d4a7a,color:#fff
-    style ARCH fill:#6b3a1a,color:#fff
-    style MODS fill:#6b3a1a,color:#fff
-    style HEALTH fill:#6b3a1a,color:#fff
-    style EXTRAS fill:#6b3a1a,color:#fff
-    style VER fill:#5a5a1a,color:#fff
-    style VAULT fill:#4a1a6b,color:#fff
-    style DIGEST fill:#1a4a6b,color:#fff
-    style CODE fill:#2d2d2d,color:#fff
-    style UPDATE fill:#6b3a1a,color:#fff
+  IN([Codebase]):::io
+  subgraph P1["Phase 1 · Analyze"]
+    direction LR
+    SURVEY["Survey ·<br/>identify modules"]:::plain --> EX["Extract facts<br/>per module"]:::haiku --> ISS["Find issues<br/>per module"]:::sonnet --> SYN["Synthesize<br/>graph + narrative"]:::opus
+  end
+  subgraph P2["Phase 2 · Generate"]
+    direction LR
+    NARR["Narrative docs<br/>overview · modules · health"]:::sonnet
+    MECH["Mechanical files<br/>canvas · maps · index · state"]:::haiku
+  end
+  subgraph P3["Phase 3 · Verify"]
+    VER["Wikilinks + frontmatter"]:::haiku
+  end
+  OUT([Obsidian vault]):::io
+  IN --> P1 --> P2 --> P3 --> OUT
+  classDef haiku fill:#eaf2fd,stroke:#2a78d6,color:#0b0b0b
+  classDef sonnet fill:#e6f6ef,stroke:#1baf7a,color:#0b0b0b
+  classDef opus fill:#efecfa,stroke:#4a3aa7,color:#0b0b0b
+  classDef io fill:#ffffff,stroke:#52514e,color:#0b0b0b
+  classDef plain fill:#f1f1ef,stroke:#b9b9b3,color:#0b0b0b
 ```
 
-<p align="center">
-  <img src="assets/code-to-docs-architecture.svg" alt="Module Architecture" width="600">
-</p>
+<sub>Boxes are colored by model tier — <b>Haiku</b> (blue) extraction and mechanical · <b>Sonnet</b> (green) writing · <b>Opus</b> (violet) reasoning · gray = orchestrator. Opus runs only for synthesis; Haiku does the bulk.</sub>
+
+**Architecture** — four command skills share a contract layer (Reference Library) and are coupled by one state file, the *incremental contract* that lets `update` and `digest` work without re-reading everything:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
+graph TD
+  GEN["Generate"]:::skill
+  UPD["Update"]:::skill
+  DIG["Digest"]:::skill
+  HOOK["Hooks"]:::skill
+  REF["Reference Library<br/>contract · templates · dispatch tables"]:::ref
+  STATE[("_state/analysis.json<br/>incremental contract")]:::state
+  GEN -. load .-> REF
+  UPD -. load .-> REF
+  DIG -. load .-> REF
+  GEN -- writes --> STATE
+  UPD -- reads + writes --> STATE
+  DIG -- reads --> STATE
+  HOOK -- triggers --> DIG
+  HOOK -- hints --> UPD
+  classDef skill fill:#eaf2fd,stroke:#2a78d6,color:#0b0b0b
+  classDef ref fill:#efecfa,stroke:#4a3aa7,color:#0b0b0b
+  classDef state fill:#e6f6ef,stroke:#1baf7a,color:#0b0b0b
+```
 
 ## What It Does
 
@@ -188,7 +160,19 @@ Loads existing vault context into the conversation — architecture, module summ
 
 ### Development Lifecycle
 
-The three modes form an optional workflow (shown in the dashed box in the diagram above):
+The three modes form an optional workflow:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
+flowchart LR
+  D["digest<br/>load vault context<br/>(read-only)"]:::io
+  C["code<br/>your changes"]:::plain
+  U["update<br/>git diff ·<br/>re-analyze changed"]:::io
+  D --> C --> U
+  U -. "re-runs analysis" .-> D
+  classDef io fill:#eaf2fd,stroke:#2a78d6,color:#0b0b0b
+  classDef plain fill:#f1f1ef,stroke:#b9b9b3,color:#0b0b0b
+```
 
 ```
 Session start:  /code-to-docs:code-to-docs-digest ./docs-vault --scope {modules you'll touch}
