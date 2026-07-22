@@ -14,13 +14,15 @@ output/
 # Obsidian workspace state
 .obsidian/
 
-# Internal — kept local, not distributed
+# Local-only working dirs — never committed
+# (scripts/, tests/, and .claude-plugin/ are intentionally TRACKED — marketplace.json is
+#  required for plugin discovery — so they must NOT be listed here.)
 research/
 docs/
 docs-vault/
-scripts/
-tests/
-.claude-plugin/
 .firecrawl/
 .superpowers/
 CLAUDE.md
+
+# Generated vault state — defense in depth (vaults normally live under docs-vault/, already ignored)
+_state/

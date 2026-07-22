@@ -140,7 +140,7 @@ SORT complexity DESC
 ## Modules by Language
 
 \`\`\`dataview
-TABLE title, complexity, status
+TABLE rows.title, rows.complexity, rows.status
 FROM #code-docs AND #module
 GROUP BY language
 \`\`\`
@@ -195,6 +195,8 @@ views:
       - complexity
       - status
       - canonical-source
+      - dependencies
+      - related-notes
     groupBy:
       property: type
       direction: ASC
@@ -273,11 +275,11 @@ When using obsidian CLI, the `obsidian-markdown`, `json-canvas`, and `obsidian-b
   ],
   "sessions": [
     {
-      "type": "generate | update | digest",
+      "type": "generate | update",
       "timestamp": "ISO 8601",
       "git_commit_start": "abc123 or null",
       "git_commit_end": "def456",
-      "mode": "quick | full | null (for digest)",
+      "mode": "quick | full",
       "modules_affected": ["Module A", "Module B"],
       "issues_resolved": ["issue-slug-1"],
       "issues_introduced": ["issue-slug-2"]
@@ -295,18 +297,17 @@ When using obsidian CLI, the `obsidian-markdown`, `json-canvas`, and `obsidian-b
 - On generate: all issues start with `status: "open"`
 - On update: resolved issues change to `status: "resolved"`, new issues added as `"open"`, unchanged module issues carried forward
 
-**Sessions array** — audit trail of the documentation lifecycle:
+**Sessions array** — audit trail of the documentation lifecycle. Only the **generate** and **update** skills append entries; the **digest** skill is read-only and never writes to this array (or any file):
 - `type: "generate"` — baseline quick or full run
-- `type: "update"` — incremental update via `code-to-docs:update`
-- `type: "digest"` — recorded when `code-to-docs:digest` loads the vault (read-only, no changes to docs)
+- `type: "update"` — incremental update via `code-to-docs:code-to-docs-update`
 - `git_commit_start` — the stored commit from the previous state (null on first generate)
 - `git_commit_end` — HEAD at the time of this session
-- `modules_affected` — which modules were analyzed (all for generate, subset for update, none for digest)
+- `modules_affected` — which modules were analyzed (all for generate, subset for update)
 - `issues_resolved` / `issues_introduced` — what changed in the health picture
 
-The sessions array provides continuity across the digest → code → update lifecycle. The digest skill reads it to report how stale the documentation is and what changed in recent sessions.
+The sessions array provides continuity across generate and update runs. `code-to-docs:code-to-docs-digest` **reads** it (to report how stale the docs are and what changed recently) but never writes it — so there is no `digest` session type.
 
-This is the **incremental contract**. The `code-to-docs:update` skill reads this state, runs `git diff` against the stored commit, and re-analyzes only changed modules. The `code-to-docs:digest` skill reads it to provide session-start context. The baseline skill writes this file on every run — do not skip writing it.
+This is the **incremental contract**. The `code-to-docs:code-to-docs-update` skill reads this state, runs `git diff` against the stored commit, and re-analyzes only changed modules. The `code-to-docs:code-to-docs-digest` skill reads it to provide session-start context. The baseline skill writes this file on every run — do not skip writing it.
 
 ### State File Validation
 

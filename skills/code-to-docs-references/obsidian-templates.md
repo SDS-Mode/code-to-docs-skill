@@ -335,6 +335,8 @@ xychart-beta
     bar [4, 3, 7]
 ```
 
+> [!note] `xychart-beta` requires a recent Obsidian Mermaid version (~10.5+); on older installs it silently fails to render. Always place a plain markdown fallback table with the same counts immediately after each `xychart-beta` block.
+
 3. **Issues by module** — Mermaid bar chart showing which modules carry the most issues
 4. **Summary table** — Dataview query pulling from `#health` tagged files
 

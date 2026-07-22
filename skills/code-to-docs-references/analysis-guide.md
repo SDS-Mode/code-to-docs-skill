@@ -11,10 +11,12 @@ This file is loaded during Phase 1 (Intake & Analysis) of the code-to-docs skill
 Before any deep reading, gather the lay of the land.
 
 1. `ls` the root directory — identify top-level structure
-2. `Glob("**/*.{ts,js,py,go,rs,java}")` (adapt extensions to the detected language) — get a file inventory
+2. `Glob("**/*.{ts,js,py,go,rs,java}")` (adapt extensions to the detected language) — get a file inventory. **If this matches few or no files, the repo may not be conventional application code** — broaden the glob (e.g. add `rb,php,cs,kt,swift,c,cpp,scala,ex`) and, if there is still no code, apply the docs-as-source fallback below.
 3. Read `README.md` if it exists — extract stated architecture, entry points, and dependencies
-4. Read the primary manifest file (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`) — extract the dependency list and available scripts
+4. Read the primary manifest (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, or a non-code manifest such as `.claude-plugin/marketplace.json`, `action.yml`, or a docs-site config) — extract the dependency list and available scripts
 5. Identify entry points: main files, index files, server startup files, CLI entry points
+
+> **Docs-as-source / config-as-source fallback.** Some repos have little or no traditional source — e.g. prompt/skill libraries (`SKILL.md` + Markdown), infrastructure-as-code, GitHub Actions, or documentation sites. When the language globs and standard manifests come up empty, treat the project's primary artifacts as its source: Markdown/YAML/JSON instruction or config files, shell scripts, templates. Modules are then directories of related artifacts (e.g. one skill = one module), and test-file/binary exclusions that don't apply are simply skipped. The rest of the analysis proceeds unchanged.
 
 **Record the following before proceeding:**
 
@@ -222,10 +224,11 @@ After all Pass 1 and Pass 2 agents return (or after sequential analysis complete
 6. **Generate the top-level architecture narrative** — a 3–5 paragraph description of the system that a new engineer could read to understand how the pieces fit together.
 7. **Aggregate limitations and improvements** — collect all issues from agent reports, deduplicate, identify system-wide themes (e.g., "no error handling strategy across 4 modules"), and rank by severity. This feeds the Health/ directory in Phase 2.
 
-**Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Provide the synthesis output and let it assemble the JSON. Schema:
+**Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Provide the synthesis output and have it populate **every** field of the state schema defined in `output-structure.md` "State File" — including `project`, `issues`, and `sessions`. The `issues` and `sessions` arrays are **required** (use `[]` only when genuinely empty); a state file missing them fails `output-structure.md` "State File Validation", which breaks the next update (falls back to full generate) and the next digest (aborts). Shape:
 
 ```json
 {
+  "project": "project name or root basename",
   "modules": ["list of module names"],
   "dependency_graph": {
     "Module Name": ["Dependency Module A", "Dependency Module B"]
@@ -235,11 +238,13 @@ After all Pass 1 and Pass 2 agents return (or after sequential analysis complete
   },
   "git_commit": "HEAD commit hash or null if not a git repo",
   "timestamp": "ISO 8601",
-  "mode": "quick or full"
+  "mode": "quick or full",
+  "issues": [],
+  "sessions": []
 }
 ```
 
-See `output-structure.md` for the full schema description and incremental contract details.
+On a baseline generate run, populate `issues` from the aggregated issues in synthesis step 7 (each with `status: "open"`) and `sessions` with one `"generate"` entry — do not ship the arrays empty if issues were found. See `output-structure.md` for the full schema description and incremental contract details.
 
 ---
 
@@ -284,7 +289,7 @@ The following paths and file types are NEVER analyzed during Phase 1. Do not Glo
 - `*.map` — source maps
 - Lock files: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Pipfile.lock`, `poetry.lock`, `Cargo.lock`, `go.sum`
 - Binary files: `*.png`, `*.jpg`, `*.gif`, `*.svg`, `*.ico`, `*.woff`, `*.woff2`, `*.ttf`, `*.eot`, `*.pdf`, `*.zip`, `*.tar`, `*.gz`
-- Test files: `*.test.ts`, `*.spec.ts`, `*.test.js`, `*.spec.js`, `*_test.go`, `test_*.py`, `*_test.py` — analysis focuses on production code; test files are used in a separate documentation phase
+- Test files: `*.test.ts`, `*.spec.ts`, `*.test.js`, `*.spec.js`, `*_test.go`, `test_*.py`, `*_test.py` — analysis focuses on production code; test files are out of scope
 
 ---
 
@@ -312,7 +317,7 @@ These rules apply to all agents and to the orchestrating session.
 
 ## Incremental Update Flow
 
-This section applies when invoked via `code-to-docs:update`. For baseline generation (`code-to-docs`), follow Steps 1-4 above.
+This section applies when invoked via `code-to-docs:code-to-docs-update`. For baseline generation (`code-to-docs`), follow Steps 1-4 above.
 
 ### Update Step 1: Load and Validate Previous State
 
@@ -323,9 +328,17 @@ This section applies when invoked via `code-to-docs:update`. For baseline genera
 
 ### Update Step 2: Diff
 
-1. Run `git diff <stored_git_commit>..HEAD --name-only` in the codebase root
+**Before diffing, confirm the stored commit is usable:**
+
+- If `git_commit` is `null` (the baseline was generated on a non-git codebase), fall back to a full generate run — there is no commit to diff against. Inform the user: "Previous run had no git commit — running full generation instead."
+- If `git_commit` is non-null but not reachable in the current repo — verify with `git cat-file -e "<git_commit>^{commit}"` — it was likely rebased, squashed, garbage-collected, or the clone is shallow. Fall back to a full generate run. Inform the user: "Stored commit `<hash>` is unreachable — running full generation instead."
+
+Only once the stored commit is confirmed reachable:
+
+1. Run `git diff <stored_git_commit>..HEAD --name-only` in the codebase root to get the changed file paths
 2. Filter out excluded paths (see Exclusions section)
-3. The result is the list of **changed files** since the last documentation run
+3. Capture the **content diff** for the changed files that fall within a known module's root path: `git diff <stored_git_commit>..HEAD -- <those paths>`. Step 4 needs the added lines to detect new cross-module imports; gathering it here (once) avoids a second diff pass
+4. The result is the list of **changed files** (with content for module-root files) since the last documentation run
 
 If the diff is empty (no changes since last run), report "No changes since last documentation run" and exit without modifying the vault.
 
@@ -347,13 +360,17 @@ Build the list of **affected modules** — modules that need re-analysis.
 
 ### Update Step 4: Auto-Select Mode
 
-| Condition | Mode |
-|-----------|------|
-| All changes within existing modules, no new modules, no deleted modules | **Quick** |
-| New module detected (new directory with source files outside existing module roots) | **Full** |
-| Module deleted (all files in a module removed) | **Full** |
-| Dependency structure changed (new cross-module imports detected in diff) | **Full** |
-| >50% of tracked files in `files_analyzed` changed | **Full** |
+Decide **before** re-analysis, using only signals available now: the changed-file list (Step 2), the `files_analyzed` map, and the content diff of module-root files (Step 2.3). Do **not** defer this to the Step 6 dependency-graph comparison — that only exists after re-analysis, which the mode choice gates.
+
+| Condition | How to detect it now | Mode |
+|-----------|----------------------|------|
+| All changes within existing modules, no new/deleted modules | every changed path maps to a known module (Step 3) | **Quick** |
+| New module detected | a changed/added path lies outside every known module root | **Full** |
+| Module deleted | every file of a module is gone from disk | **Full** |
+| Dependency structure changed | the Step 2.3 content diff has **added** (`+`) import/require lines in one module's files that reference another module's root path | **Full** |
+| >50% of tracked files changed | `|changed ∩ files_analyzed keys| / |files_analyzed| > 0.5`, computed globally | **Full** |
+
+Detecting "new cross-module imports" scans only the added (`+`) lines of the Step 2.3 content diff for import/require/include statements whose target resolves into a *different* module's root than the file's own. This is a heuristic — it can over-trigger on comments or strings that look like imports. When in doubt, choose **Full**; it is the safe over-approximation.
 
 Report the auto-selected mode to the user: "Update mode: quick (2 of 8 modules affected)" or "Update mode: full (new module detected: Scheduler)".
 
@@ -378,9 +395,9 @@ Run the same synthesis procedure as Step 4, but with awareness of what changed:
 2. Compare new dependency graph to previous — flag any structural changes
 3. Regenerate architecture narrative (always — even small changes can shift the system story)
 4. Merge issues:
-   - Issues in re-analyzed modules: replace with new analysis results
+   - Issues in re-analyzed modules that the new analysis still reports: keep/replace with the new details, status `open`
    - Issues in unchanged modules: carry forward with status `open`
-   - Issues from previous run that no longer appear in re-analyzed modules: mark as `resolved`
+   - Issues from a previous run that the new analysis no longer reports: mark `resolved` **only if** the changed files (Step 2) actually touched the issue's recorded `file` (and, when line ranges are recorded, overlap its `lines`). If the code the issue points at was **not** touched, the omission is almost certainly Pass 2 non-determinism, not a fix — keep the issue `open`. When unsure, keep it `open`. Marking `resolved` requires positive evidence that the referenced code changed.
 
 ### Update Step 7: Selective Generation
 
@@ -402,7 +419,9 @@ Use the same Phase 2 generation flow, but selectively:
 
 ### Update Step 8: Update State File
 
-Write `_state/analysis.json` with:
+**Guard against a concurrent write first (optimistic concurrency).** Re-read `_state/analysis.json` and compare its `git_commit` and `timestamp` to the values loaded in Step 1. If either changed, another update ran while this one was in progress (for example a hook-triggered update racing a manual one) — abort without writing and tell the user to re-run, rather than clobber the other run's merged `issues` and `sessions` history.
+
+Then write `_state/analysis.json` with:
 - `git_commit` → current HEAD
 - `timestamp` → now
 - `mode` → the auto-selected mode

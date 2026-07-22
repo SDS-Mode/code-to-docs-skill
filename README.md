@@ -136,7 +136,7 @@ Each phase has a **dispatch table** — an authoritative checklist listing every
 Add this repo as a marketplace source, then install the plugin:
 
 ```
-/plugin marketplace add RCellar/code-to-docs-skill
+/plugin marketplace add SDS-Mode/code-to-docs-skill
 /plugin install code-to-docs@code-to-docs-skill
 ```
 
@@ -159,15 +159,15 @@ cp skills/code-to-docs-references/* ~/.claude/skills/code-to-docs-references/
 ### Generate Documentation
 
 ```
-/code-to-docs /path/to/codebase
-/code-to-docs /path/to/codebase --mode full
-/code-to-docs /path/to/codebase --mode quick --output ./my-docs/
+/code-to-docs:code-to-docs /path/to/codebase
+/code-to-docs:code-to-docs /path/to/codebase --mode full
+/code-to-docs:code-to-docs /path/to/codebase --mode quick --output ./my-docs/
 ```
 
 ### Incremental Update (after coding)
 
 ```
-/code-to-docs:update /path/to/codebase
+/code-to-docs:code-to-docs-update /path/to/codebase
 ```
 
 Reads `_state/analysis.json` from the existing vault, runs `git diff` against the stored commit, and re-analyzes only affected modules. Auto-selects quick or full based on scope of changes:
@@ -179,9 +179,9 @@ Tracks issues across runs: resolved issues marked, new issues added, unchanged m
 ### Digest Context (before coding)
 
 ```
-/code-to-docs:digest ./docs-vault
-/code-to-docs:digest ./docs-vault --scope Auth,Database --focus issues
-/code-to-docs:digest ./docs-vault --focus all
+/code-to-docs:code-to-docs-digest ./docs-vault
+/code-to-docs:code-to-docs-digest ./docs-vault --scope Auth,Database --focus issues
+/code-to-docs:code-to-docs-digest ./docs-vault --focus all
 ```
 
 Loads existing vault context into the conversation — architecture, module summaries, known issues, session history — without modifying any files. Token-budgeted: <3K default, <6K with scoped modules, <10K with `--focus all`.
@@ -191,9 +191,9 @@ Loads existing vault context into the conversation — architecture, module summ
 The three modes form an optional workflow (shown in the dashed box in the diagram above):
 
 ```
-Session start:  /code-to-docs:digest ./docs-vault --scope {modules you'll touch}
+Session start:  /code-to-docs:code-to-docs-digest ./docs-vault --scope {modules you'll touch}
 Coding work:    ... normal development ...
-Session end:    /code-to-docs:update /path/to/codebase
+Session end:    /code-to-docs:code-to-docs-update /path/to/codebase
 ```
 
 Each mode works independently — you don't need the full lifecycle to use any single one.
@@ -203,9 +203,9 @@ Each mode works independently — you don't need the full lifecycle to use any s
 Install project-level hooks to automate the digest → code → update lifecycle:
 
 ```
-/code-to-docs:hooks setup              # uses default ./docs-vault
-/code-to-docs:hooks setup ./my-vault   # custom vault path
-/code-to-docs:hooks teardown           # remove hooks (preserves other project hooks)
+/code-to-docs:code-to-docs-hooks setup              # uses default ./docs-vault
+/code-to-docs:code-to-docs-hooks setup ./my-vault   # custom vault path
+/code-to-docs:code-to-docs-hooks teardown           # remove hooks (preserves other project hooks)
 ```
 
 Setup writes two hooks into the project's `.claude/settings.json`:

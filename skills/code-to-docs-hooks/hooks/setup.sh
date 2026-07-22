@@ -5,24 +5,25 @@
 # Usage:
 #   ./setup.sh [vault-path]
 #
-# vault-path defaults to ./docs-vault (same as code-to-docs --output default).
-# Set CODE_TO_DOCS_VAULT env var for non-standard vault locations.
+# vault-path defaults to $CODE_TO_DOCS_VAULT, then ./docs-vault (the code-to-docs --output default).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VAULT_PATH="${1:-./docs-vault}"
+VAULT_PATH="${1:-${CODE_TO_DOCS_VAULT:-./docs-vault}}"
 PROJECT_SETTINGS=".claude/settings.json"
 
-# Resolve absolute path to hook scripts
+# Resolve absolute paths to the hook scripts
 DIGEST_HOOK="$SCRIPT_DIR/digest-on-start.sh"
 UPDATE_HOOK="$SCRIPT_DIR/update-hint-on-commit.sh"
 
-if [[ ! -f "$DIGEST_HOOK" ]]; then
-    echo "Error: Cannot find $DIGEST_HOOK"
-    echo "Run this script from the code-to-docs hooks directory or ensure the skill is installed."
-    exit 1
-fi
+for hook in "$DIGEST_HOOK" "$UPDATE_HOOK"; do
+    if [[ ! -f "$hook" ]]; then
+        echo "Error: Cannot find $hook" >&2
+        echo "Run this script from the code-to-docs hooks directory or ensure the skill is installed." >&2
+        exit 1
+    fi
+done
 
 # Ensure hooks are executable
 chmod +x "$DIGEST_HOOK" "$UPDATE_HOOK"
@@ -30,75 +31,58 @@ chmod +x "$DIGEST_HOOK" "$UPDATE_HOOK"
 # Ensure .claude directory exists
 mkdir -p .claude
 
-# Build the hooks JSON fragment and write to temp file (avoids string escaping issues)
-HOOKS_TMPFILE=$(mktemp)
-trap 'rm -f "$HOOKS_TMPFILE"' EXIT
+# Build the hook entries and merge into settings.json with python3. All dynamic values are passed
+# as argv so json.dumps handles JSON escaping and shlex.quote handles shell escaping — nothing is
+# interpolated raw into JSON or into the embedded shell command, so paths with quotes/spaces are safe.
+# Re-running with a different vault path REPLACES the existing code-to-docs entries (not a no-op).
+python3 - "$PROJECT_SETTINGS" "$VAULT_PATH" "$DIGEST_HOOK" "$UPDATE_HOOK" <<'PY'
+import json, os, shlex, sys
 
-cat > "$HOOKS_TMPFILE" <<HOOKEOF
-{
-  "hooks": {
-    "SessionStart": [
-      {
+settings_path, vault_path, digest_hook, update_hook = sys.argv[1:5]
+
+def command(hook):
+    # CODE_TO_DOCS_VAULT=<vault> bash <hook>, each value shell-escaped.
+    return f"CODE_TO_DOCS_VAULT={shlex.quote(vault_path)} bash {shlex.quote(hook)}"
+
+new_handlers = {
+    "SessionStart": {
         "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "CODE_TO_DOCS_VAULT='$VAULT_PATH' bash '$DIGEST_HOOK'",
-            "source": "code-to-docs",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
+        "hooks": [{"type": "command", "command": command(digest_hook),
+                   "source": "code-to-docs", "timeout": 10}],
+    },
+    "PostToolUse": {
         "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "CODE_TO_DOCS_VAULT='$VAULT_PATH' bash '$UPDATE_HOOK'",
-            "source": "code-to-docs",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
+        "hooks": [{"type": "command", "command": command(update_hook),
+                   "source": "code-to-docs", "timeout": 5}],
+    },
 }
-HOOKEOF
 
-# Merge with existing settings or create new
-if [[ -f "$PROJECT_SETTINGS" ]]; then
-    # Merge hooks into existing settings using Python (available everywhere)
-    python3 -c "
-import json, sys
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        settings = json.load(f)
+else:
+    settings = {}
 
-existing = json.load(open('$PROJECT_SETTINGS'))
-new_hooks = json.load(open('$HOOKS_TMPFILE'))
+hooks = settings.setdefault("hooks", {})
+replaced = False
+for event, handler in new_handlers.items():
+    existing = hooks.setdefault(event, [])
+    # Drop any prior code-to-docs handler for this event, then append the fresh one, so a re-run
+    # with a new vault path updates the command instead of silently doing nothing.
+    before = len(existing)
+    existing[:] = [
+        h for h in existing
+        if not any(hook.get("source") == "code-to-docs" for hook in h.get("hooks", []))
+    ]
+    if len(existing) != before:
+        replaced = True
+    existing.append(handler)
 
-# Merge hooks — append to existing arrays, don't replace
-if 'hooks' not in existing:
-    existing['hooks'] = {}
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
 
-for event, handlers in new_hooks['hooks'].items():
-    if event not in existing['hooks']:
-        existing['hooks'][event] = []
-    # Check for duplicates by source marker
-    existing_sources = set()
-    for h in existing['hooks'][event]:
-        for hook in h.get('hooks', []):
-            if hook.get('source') == 'code-to-docs':
-                existing_sources.add(event)
-    if event not in existing_sources:
-        existing['hooks'][event].extend(handlers)
-
-json.dump(existing, open('$PROJECT_SETTINGS', 'w'), indent=2)
-print('Merged code-to-docs hooks into existing $PROJECT_SETTINGS')
-" HOOKS_TMPFILE="$HOOKS_TMPFILE" 2>&1
-else
-    python3 -c "import json,sys; json.dump(json.load(open('$HOOKS_TMPFILE')), open('$PROJECT_SETTINGS','w'), indent=2)" HOOKS_TMPFILE="$HOOKS_TMPFILE"
-    echo "Created $PROJECT_SETTINGS with code-to-docs hooks"
-fi
+print(("Updated" if replaced else "Installed") + f" code-to-docs hooks in {settings_path}")
+PY
 
 echo ""
 echo "Hooks installed:"
