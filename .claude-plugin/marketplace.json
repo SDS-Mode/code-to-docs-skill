@@ -7,7 +7,7 @@
     {
       "name": "code-to-docs",
       "source": "./",
-      "description": "Generate Obsidian-native documentation vaults from codebases with architecture diagrams, API references, and teaching-focused explanations at three audience levels.",
+      "description": "Analyze a codebase and generate an Obsidian-native documentation vault — architecture diagrams, API references, a codebase health assessment, and teaching-focused explanations at three audience levels — then keep it current with incremental git-diff updates and read-only session digests.",
       "version": "0.4.0"
     }
   ]
