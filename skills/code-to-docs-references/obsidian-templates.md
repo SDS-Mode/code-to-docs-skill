@@ -290,7 +290,7 @@ Use diagrams to communicate structure and flow that prose handles poorly. Do not
 **Styling & color (light/dark-safe).** Reuse this init directive and `classDef` palette so diagrams stay consistent and legible in both themes. The three tier colors mirror the model tiers (Haiku / Sonnet / Opus); `io` / `state` / `plain` cover structural nodes.
 
 ```
-%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
+%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
 ```
 
 | classDef | fill | stroke | Use for |
