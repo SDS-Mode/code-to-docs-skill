@@ -3,9 +3,9 @@
 A Claude Code skill that analyzes codebases and generates Obsidian-native documentation vaults with architecture diagrams, API references, codebase health assessments, and teaching-focused explanations at three audience levels. Supports a full development lifecycle: digest existing docs at session start, code, then update docs at session end.
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
+%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
 flowchart TB
-  IN([Codebase]):::io
+  IN(Codebase):::io
   subgraph P1["Phase 1 · Analyze"]
     direction LR
     SURVEY["Survey ·<br/>identify modules"]:::plain --> EX["Extract facts<br/>per module"]:::haiku --> ISS["Find issues<br/>per module"]:::sonnet --> SYN["Synthesize<br/>graph + narrative"]:::opus
@@ -18,7 +18,7 @@ flowchart TB
   subgraph P3["Phase 3 · Verify"]
     VER["Wikilinks + frontmatter"]:::haiku
   end
-  OUT([Obsidian vault]):::io
+  OUT("Obsidian vault"):::io
   IN --> P1 --> P2 --> P3 --> OUT
   classDef haiku fill:#eaf2fd,stroke:#2a78d6,color:#0b0b0b
   classDef sonnet fill:#e6f6ef,stroke:#1baf7a,color:#0b0b0b
@@ -32,7 +32,7 @@ flowchart TB
 **Architecture** — four command skills share a contract layer (Reference Library) and are coupled by one state file, the *incremental contract* that lets `update` and `digest` work without re-reading everything:
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
+%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
 graph TD
   GEN["Generate"]:::skill
   UPD["Update"]:::skill
@@ -163,7 +163,7 @@ Loads existing vault context into the conversation — architecture, module summ
 The three modes form an optional workflow:
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
+%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
 flowchart LR
   D["digest<br/>load vault context<br/>(read-only)"]:::io
   C["code<br/>your changes"]:::plain

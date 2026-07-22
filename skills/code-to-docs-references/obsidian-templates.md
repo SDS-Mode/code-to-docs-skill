@@ -285,11 +285,12 @@ Use diagrams to communicate structure and flow that prose handles poorly. Do not
 - **Color must carry meaning, never decorate.** Add fills only when they encode a real dimension — model tier, module role, or node kind (input/output/state). A diagram where every box is a different color "for looks" is noise; if nothing is being encoded, leave nodes unstyled.
 - **When you color, use light fills with dark text** (palette below) so each box is legible on any surface — the fill supplies its own light background regardless of theme. Keep edges a recessive mid-gray and give edge labels a solid background.
 - **Add a one-line legend** (a caption under the diagram, or a small `subgraph` key) whenever color encodes meaning, so identity is never conveyed by color alone.
+- **Prevent text clipping.** Use rounded rectangles `(text)` for input/output endpoint nodes — **not** stadium/pill shapes `([text])`, whose curved caps clip longer labels on some renderers (notably GitHub). Keep `'flowchart':{'padding':10}` in the init (below) so node text always has horizontal breathing room, and keep endpoint labels to one or two words.
 
 **Styling & color (light/dark-safe).** Reuse this init directive and `classDef` palette so diagrams stay consistent and legible in both themes. The three tier colors mirror the model tiers (Haiku / Sonnet / Opus); `io` / `state` / `plain` cover structural nodes.
 
 ```
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
+%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontFamily':'-apple-system, Segoe UI, sans-serif','fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
 ```
 
 | classDef | fill | stroke | Use for |
@@ -298,7 +299,7 @@ Use diagrams to communicate structure and flow that prose handles poorly. Do not
 | `sonnet` | `#e6f6ef` | `#1baf7a` (green) | Sonnet tier — narrative nodes |
 | `opus` | `#efecfa` | `#4a3aa7` (violet) | Opus tier — reasoning / synthesis nodes |
 | `state` | `#e6f6ef` | `#1baf7a` | The state file / shared data store |
-| `io` | `#ffffff` | `#52514e` | Inputs and outputs (codebase, vault) |
+| `io` | `#ffffff` | `#52514e` | Inputs and outputs (codebase, vault) — draw as a rounded rectangle `(text)`, never a stadium |
 | `plain` | `#f1f1ef` | `#b9b9b3` | Neutral / orchestrator / structural |
 
 Every class uses `color:#0b0b0b` (dark text). Declare only the classes a diagram actually uses.
@@ -306,7 +307,7 @@ Every class uses `color:#0b0b0b` (dark text). Declare only the classes a diagram
 **Example — dependency graph (styled):**
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
+%%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
 graph TD
     RT["Container Runtime"]:::plain -->|uses| DC["Docker Client"]:::plain
     RT -->|reads| ENV["Environment Config"]:::state
