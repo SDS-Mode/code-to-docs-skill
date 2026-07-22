@@ -2,6 +2,11 @@
 
 All notable changes to the code-to-docs skill are documented in this file.
 
+## 2026-07-22
+
+### Changed
+- **Marketplace listing** — expanded the `marketplace.json` plugin description to reflect the whole project: added the codebase health assessment and the incremental-update / read-only-digest lifecycle, so it no longer reads as a one-shot generator.
+
 ## 2026-07-21
 
 Fixes from a self-analysis pass (running the skill on its own source surfaced 30 issues).
