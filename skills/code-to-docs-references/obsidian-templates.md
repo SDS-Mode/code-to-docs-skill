@@ -282,16 +282,19 @@ Use diagrams to communicate structure and flow that prose handles poorly. Do not
 - Prefer `sequenceDiagram` for the Intermediate audience level when describing module interactions with 3 or more steps.
 - Diagrams are placed inside fenced code blocks with the `mermaid` language tag. No other content goes inside the block.
 - **Never force `theme: 'dark'`.** Begin every diagram with `%%{init: {'theme':'base', …}}%%` so it renders on both light and dark surfaces (Obsidian themes, GitHub light/dark). A hard-coded dark theme is unreadable on a light background and vice versa.
+- **Never set `fontFamily` in the init directive.** GitHub renders Mermaid inside a sandboxed iframe that *measures* each label's width in its own default font but *renders* with the font you name — so a custom `fontFamily` makes every label, and every subgraph title, a few pixels too wide for its box and clips the last glyph on the right ("Codebase" → "Codebas"). Omit `fontFamily` entirely and let Mermaid use one font for both measuring and rendering. (Local tools like `mermaid-cli` use a single font throughout, so this is invisible there — it only bites on GitHub. Do not re-introduce `fontFamily` to make diagrams "look nicer.")
 - **Color must carry meaning, never decorate.** Add fills only when they encode a real dimension — model tier, module role, or node kind (input/output/state). A diagram where every box is a different color "for looks" is noise; if nothing is being encoded, leave nodes unstyled.
 - **When you color, use light fills with dark text** (palette below) so each box is legible on any surface — the fill supplies its own light background regardless of theme. Keep edges a recessive mid-gray and give edge labels a solid background.
 - **Add a one-line legend** (a caption under the diagram, or a small `subgraph` key) whenever color encodes meaning, so identity is never conveyed by color alone.
-- **Prevent text clipping.** Use rounded rectangles `(text)` for input/output endpoint nodes — **not** stadium/pill shapes `([text])`, whose curved caps clip longer labels on some renderers (notably GitHub). Keep `'flowchart':{'padding':10}` in the init (below) so node text always has horizontal breathing room, and keep endpoint labels to one or two words.
+- **Prevent text clipping.** The primary cause is a custom `fontFamily` (see the rule above) — don't set one. As secondary defense: use rounded rectangles `(text)` for input/output endpoints (not stadium/pill `([text])`, whose curved caps eat horizontal room), keep `'flowchart':{'padding':10}` in the init (below) so text has breathing room, and keep endpoint labels to one or two words.
 
 **Styling & color (light/dark-safe).** Reuse this init directive and `classDef` palette so diagrams stay consistent and legible in both themes. The three tier colors mirror the model tiers (Haiku / Sonnet / Opus); `io` / `state` / `plain` cover structural nodes.
 
 ```
 %%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff','clusterBkg':'#f7f7f5','clusterBorder':'#d9d9d4'}}}%%
 ```
+
+**`fontFamily` is deliberately absent from this directive — do not add it back** (it clips labels on GitHub; see the rule above). Copy the directive as-is.
 
 | classDef | fill | stroke | Use for |
 |----------|------|--------|---------|

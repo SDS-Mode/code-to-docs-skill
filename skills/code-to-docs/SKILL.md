@@ -101,6 +101,7 @@ Dispatch in parallel where possible:
 9. Using Opus for extraction or mechanical tasks — Haiku handles these; Opus is reserved for issue analysis on complex modules and cross-module synthesis on large codebases
 10. Issue analysis agents re-reading entire modules — they receive the Haiku report as input and should only read source files to verify specific concerns
 11. Dispatching an agent without setting the `model` parameter to match the dispatch table for that phase
+12. Setting a custom `fontFamily` in a Mermaid `%%{init}%%` directive — it clips every diagram label on GitHub's renderer; omit it (see `../code-to-docs-references/obsidian-templates.md` §5)
 
 ---
 
@@ -118,3 +119,4 @@ Dispatch in parallel where possible:
 | "I'll use Opus for everything to be safe" | Opus costs 10-15x more than Haiku. Use the cheapest model that meets the task's cognitive demand. Check the model selection tables. |
 | "This module is simple, I'll skip Pass 2" | Every module gets an issue analysis pass. Simple modules get Sonnet; the pass may report "None identified" — that's a valid outcome. |
 | "I'll just handle this inline instead of dispatching an agent" | The orchestrator runs at Opus. If the dispatch table says Haiku or Sonnet, dispatch an agent — doing the work inline costs 10-15x more. |
+| "A nicer `fontFamily` will make the diagrams look more polished" | It clips every label on GitHub — GitHub measures width in its default font but renders with yours. Never set `fontFamily` in a Mermaid init directive. |
