@@ -10,7 +10,7 @@ VAULT_PATH="${CODE_TO_DOCS_VAULT:-./docs-vault}"
 STATE_FILE="$VAULT_PATH/_state/analysis.json"
 
 if [[ ! -f "$STATE_FILE" ]]; then
-    echo "[code-to-docs] No documentation vault found at $VAULT_PATH — run /code-to-docs to generate one."
+    echo "[code-to-docs] No documentation vault found at $VAULT_PATH — run /code-to-docs:code-to-docs to generate one."
     exit 0
 fi
 
@@ -21,7 +21,7 @@ import json
 d = json.load(open('$STATE_FILE'))
 project = d.get('project', 'unknown')
 modules = ', '.join(d.get('modules', []))
-commit = d.get('git_commit', 'unknown')[:8]
+commit = (d.get('git_commit') or 'unknown')[:8]
 timestamp = d.get('timestamp', 'unknown')
 mode = d.get('mode', 'unknown')
 issue_count = len([i for i in d.get('issues', []) if i.get('status') == 'open'])
@@ -39,15 +39,15 @@ cat <<EOF
   Current HEAD: $CURRENT_HEAD
   Open issues: $ISSUE_COUNT
 
-To load full context, run: /code-to-docs:digest ./docs-vault
-To load specific modules: /code-to-docs:digest ./docs-vault --scope {module names}
-To see known issues: /code-to-docs:digest ./docs-vault --focus issues
+To load full context, run: /code-to-docs:code-to-docs-digest $VAULT_PATH
+To load specific modules: /code-to-docs:code-to-docs-digest $VAULT_PATH --scope {module names}
+To see known issues: /code-to-docs:code-to-docs-digest $VAULT_PATH --focus issues
 EOF
 
 if [[ "$COMMIT" != "unknown" && "$CURRENT_HEAD" != "unknown" && "$COMMIT" != "$CURRENT_HEAD" ]]; then
-    CHANGES=$(git diff --stat "${COMMIT}..HEAD" -- . ':!docs-vault' 2>/dev/null | tail -1 || echo "")
+    CHANGES=$(git diff --stat "${COMMIT}..HEAD" -- . ":!${VAULT_PATH#./}" 2>/dev/null | tail -1 || echo "")
     if [[ -n "$CHANGES" ]]; then
         echo "  Documentation may be stale — $CHANGES since last run."
-        echo "  Run /code-to-docs:update after your work to sync."
+        echo "  Run /code-to-docs:code-to-docs-update after your work to sync."
     fi
 fi

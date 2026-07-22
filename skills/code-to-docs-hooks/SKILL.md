@@ -1,5 +1,5 @@
 ---
-name: hooks
+name: code-to-docs-hooks
 description: >
   Install or remove project-level automation hooks for the code-to-docs lifecycle.
   Setup adds SessionStart (digest on session start) and PostToolUse (update hint
@@ -15,15 +15,15 @@ Install or remove project-level hooks that automate the code-to-docs lifecycle. 
 
 | Skill | Purpose |
 |-------|---------|
-| `code-to-docs` | Full documentation generation |
-| `code-to-docs:digest` | What the SessionStart hook triggers |
-| `code-to-docs:update` | What the PostToolUse hook reminds about |
+| `code-to-docs:code-to-docs` | Full documentation generation |
+| `code-to-docs:code-to-docs-digest` | What the SessionStart hook triggers |
+| `code-to-docs:code-to-docs-update` | What the PostToolUse hook reminds about |
 
 ## Invocation
 
 ```
-Skill(skill: "code-to-docs:hooks", args: "setup [vault-path]")
-Skill(skill: "code-to-docs:hooks", args: "teardown")
+Skill(skill: "code-to-docs:code-to-docs-hooks", args: "setup [vault-path]")
+Skill(skill: "code-to-docs:code-to-docs-hooks", args: "teardown")
 ```
 
 ## Setup

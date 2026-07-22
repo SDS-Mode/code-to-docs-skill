@@ -36,8 +36,8 @@ for event in list(hooks.keys()):
 if not hooks and 'hooks' in settings:
     del settings['hooks']
 
-# Remove file entirely if empty (only {} left)
-if settings == {} or settings == {'hooks': {}}:
+# Remove file entirely if empty (only {} left; the empty-hooks key was already deleted above)
+if settings == {}:
     import os
     os.remove('$PROJECT_SETTINGS')
     print(f'Removed {removed} code-to-docs hook(s). Deleted empty $PROJECT_SETTINGS.')

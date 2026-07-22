@@ -11,14 +11,14 @@ Analyze a codebase and produce an Obsidian-native documentation vault containing
 
 | Skill | Purpose |
 |-------|---------|
-| `code-to-docs:update` | Incremental update — re-analyze only modules with changes since last run |
-| `code-to-docs:digest` | Load existing vault context into the conversation (read-only) |
-| `code-to-docs:hooks` | Install/remove automation hooks for the generate-digest-update lifecycle |
+| `code-to-docs:code-to-docs-update` | Incremental update — re-analyze only modules with changes since last run |
+| `code-to-docs:code-to-docs-digest` | Load existing vault context into the conversation (read-only) |
+| `code-to-docs:code-to-docs-hooks` | Install/remove automation hooks for the generate-digest-update lifecycle |
 
 ## Invocation
 
 ```
-Skill(skill: "code-to-docs", args: "<path> [--mode quick|full] [--output <path>]")
+Skill(skill: "code-to-docs:code-to-docs", args: "<path> [--mode quick|full] [--output <path>]")
 ```
 
 - `<path>` — codebase root (required)
@@ -57,7 +57,7 @@ Read `../code-to-docs-references/analysis-guide.md` for detailed instructions.
 2. Identify independent modules
 3. Dispatch parallel analysis agents (MUST parallelize if 3+ modules):
    - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files)
-   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements), receiving the Haiku output as input. Use Opus for High complexity or >1000 LOC modules; Sonnet otherwise.
+   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements), receiving the Haiku output as input. Escalate to Opus when the module is High complexity, exceeds 1000 LOC, **or** involves concurrency, shared mutable state, or security-sensitive logic (see the Model Tiers table above); Sonnet otherwise.
 4. Synthesize into dependency graph and architecture narrative — orchestrator for ≤4 modules, **Opus agent** for 5+ modules or complex dependency graphs
 5. Write `_state/analysis.json` (Haiku agent — mechanical data transform)
 
@@ -70,9 +70,9 @@ Read `../code-to-docs-references/obsidian-templates.md` for formatting rules. Re
 Dispatch in parallel where possible:
 
 1. **Sonnet agent**: `Architecture/System Overview.md` (narrative writing)
-2. **Haiku agents** (parallel): `Architecture/System Map.canvas`, `Architecture/Dependency Map.md`, `Documentation.base`, `Index.md` (data transforms)
+2. **Haiku agents** (parallel): `Architecture/System Map.canvas`, `Architecture/Dependency Map.md`, `Health/Health Summary.md` (severity charts), `Documentation.base`, `Index.md` (data transforms)
 3. **Sonnet agents** (parallel, one per module): `Modules/{Name}.md` — each receives its module's analysis report + synthesis context
-4. **Sonnet agent**: `Health/` — Limitations.md, Code Review.md, Health Summary.md with severity charts
+4. **Sonnet agent**: `Health/Limitations.md` and `Health/Code Review.md` (issue framing/judgment). `Health/Health Summary.md` is a mechanical chart transform — it is a **Haiku** task in step 2, per the authoritative Phase 2 dispatch table in `output-structure.md`, not a Sonnet task.
 5. (Full mode) **Sonnet agents**: `Patterns/`, `Onboarding/`, `Cross-Cutting/`
 
 ### Phase 3: Verification & Output
@@ -101,6 +101,7 @@ Dispatch in parallel where possible:
 9. Using Opus for extraction or mechanical tasks — Haiku handles these; Opus is reserved for issue analysis on complex modules and cross-module synthesis on large codebases
 10. Issue analysis agents re-reading entire modules — they receive the Haiku report as input and should only read source files to verify specific concerns
 11. Dispatching an agent without setting the `model` parameter to match the dispatch table for that phase
+12. Setting a custom `fontFamily` in a Mermaid `%%{init}%%` directive — it clips every diagram label on GitHub's renderer; omit it (see `../code-to-docs-references/obsidian-templates.md` §5)
 
 ---
 
@@ -118,3 +119,4 @@ Dispatch in parallel where possible:
 | "I'll use Opus for everything to be safe" | Opus costs 10-15x more than Haiku. Use the cheapest model that meets the task's cognitive demand. Check the model selection tables. |
 | "This module is simple, I'll skip Pass 2" | Every module gets an issue analysis pass. Simple modules get Sonnet; the pass may report "None identified" — that's a valid outcome. |
 | "I'll just handle this inline instead of dispatching an agent" | The orchestrator runs at Opus. If the dispatch table says Haiku or Sonnet, dispatch an agent — doing the work inline costs 10-15x more. |
+| "A nicer `fontFamily` will make the diagrams look more polished" | It clips every label on GitHub — GitHub measures width in its default font but renders with yours. Never set `fontFamily` in a Mermaid init directive. |
