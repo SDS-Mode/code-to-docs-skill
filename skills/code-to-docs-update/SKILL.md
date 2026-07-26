@@ -57,15 +57,15 @@ In update mode this has one specific consequence worth stating plainly: **carryi
 
 The flow, in order:
 
-1. **Load & validate state** — read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run. If `schema_version` or `module_index` is absent, run the one-time v1 → v2 migration (Haiku-only backfill) and continue — do **not** fall back to full generate. Read only the state file here.
+1. **Load & validate state** — read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run. If `schema_version` or `module_index` is absent, run the one-time v1 → v2 migration (Haiku-only backfill) and continue — do **not** fall back to full generate. Record the loaded `git_commit`/`timestamp` as this run's concurrency claim. Read only the state file here.
 2. **Check the stored commit, then diff** — if `git_commit` is null or unreachable (rebased/squashed/gc'd/shallow), fall back to full generate. Otherwise run `git diff <stored_commit>..HEAD --name-only`, and also capture the **content diff** of changed files inside known module roots, scoped by `module_index[*].roots` (step 4 needs it). Empty diff → report "no changes" and exit.
-3. **Map changed files to modules** — a lookup, not a survey: exact `files_analyzed[path]` hit, else a *unique* root prefix match, else an *ambiguous* match where modules share a root, else outside every module. See `output-structure.md` "Resolving a Changed File to Its Module". Build the affected-module list; everything else is carried forward.
+3. **Map changed files to modules** — a lookup, not a survey: exact `files_analyzed[path]` hit, else a *unique* root prefix match, else an *ambiguous* match where modules share a root, else outside every module. See `output-structure.md` "Resolving a Changed File to Its Module". Also mark as affected any module whose report `source-commit` disagrees with state (a torn previous run). Build the affected-module list; everything else is carried forward.
 4. **Auto-select quick/full** — decide *now*, from the changed-file list, `files_analyzed`, `module_index`, and the step-2 content diff (used to detect new cross-module imports). New/deleted module, changed dependency structure, or >50% churn → full; otherwise quick. When unsure, prefer full.
-5. **Re-analyze affected modules** — same two-pass analysis as baseline, writing to each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. Unchanged modules are left alone entirely.
+5. **Re-analyze affected modules** — re-check the concurrency claim *before writing anything*, then run the same two-pass analysis as baseline against each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. Unchanged modules are left alone entirely.
 6. **Merge synthesis** — rebuild the dependency graph from fresh receipts plus the stored graph, rewrite `_state/synthesis.md`, and merge issues (see Issue Tracking below).
-7. **Selective generation** — regenerate architecture, health, and affected module docs; preserve unchanged module docs. Pass inputs by reference per the Phase 2 dispatch table.
+7. **Selective generation** — regenerate affected module docs always; gate the cross-module outputs on whether the dependency graph, module purposes, or issue set actually moved, and report what was skipped. Clean up every artifact of a deleted module. Pass inputs by reference per the Phase 2 dispatch table.
 8. **Update state (with a concurrency guard)** — re-read the state file and abort if its `git_commit`/`timestamp` changed since step 1 (a concurrent update); otherwise write the new state and append a session entry. Re-analyzed modules get fresh `module_index` entries; carried-forward modules keep their **original** `analyzed_at` / `source_commit`.
-9. **Verify** — Haiku agent checks wikilinks + frontmatter across the whole vault.
+9. **Verify** — Haiku agent checks wikilinks + frontmatter across the files written this run, plus (only if something was deleted or renamed) files carrying links to the removed titles.
 
 ---
 
@@ -91,20 +91,26 @@ Marking an issue `resolved` requires positive evidence that the code it points a
 2. Marking an issue `resolved` without the diff having touched its file/lines
 3. Choosing quick vs full from data that only exists after re-analysis — the mode is decided in step 4 from signals gathered in step 2
 4. Re-analyzing unchanged modules — only affected modules get re-analyzed
-5. Skipping state-file validation, or overwriting state without the step-8 concurrency guard
+5. Skipping state-file validation, or writing without the concurrency guard — checked **twice**, before Step 5 and at Step 8
 6. Deleting unchanged module docs — preserve them, only regenerate affected ones
 7. **Re-surveying the codebase to re-derive module roots** — `module_index` is authoritative; a re-survey can rename a module and break every wikilink pointing at it
 8. **Reading an unchanged module's `_state/modules/<slug>.md` or `Modules/{Name}.md`** — carrying forward means leaving the file alone, not loading it
 9. **Advancing a carried-forward module's `analyzed_at` / `source_commit`** — that falsely claims it was analyzed at this commit and destroys staleness tracking
 10. Falling back to a full generate run on a v1 state file instead of migrating it
-11. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
+11. **Reading the previous `_state/synthesis.md`** — every input needed to rewrite it is in `module_index` and the receipts
+12. **Writing reports without re-checking the concurrency claim first** — losing the race after Step 5 leaves your reports beside another run's state
+13. **Leaving a deleted module's report or doc on disk** — every future update carries it forward as a module that no longer exists
+14. **Skipping a cross-module regeneration without saying so** — a silent skip is indistinguishable from a bug; report what was skipped and which signal was unchanged
+15. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
 
 ## Rationalization Traps
 
 | Thought | Reality |
 |---------|---------|
-| "I need to see the unchanged modules to write a coherent system overview" | Their names, purposes, deps, and complexity are in `analysis.json`, and last run's one-liners are in `_state/synthesis.md` § Module Purposes. |
+| "I need to see the unchanged modules to write a coherent system overview" | Their names, purposes, deps, and complexity are all in `module_index`, already loaded in Step 1. You never need to read the previous synthesis back. |
 | "I'll just re-glob for the module roots, it's cheap" | It is not free, and it is not safe: a redrawn boundary renames a module and orphans its doc. `module_index` is the contract. |
 | "This vault is the old schema, safest to regenerate from scratch" | Migration is a Haiku-only backfill. A full regenerate is exactly the cost this schema exists to avoid. |
 | "Re-analysis didn't mention that issue, so it's fixed" | Only if the diff touched the code it points at. Otherwise it is Pass 2 non-determinism — keep it `open`. |
 | "I'll refresh every module's timestamp so state looks consistent" | Then nothing records which reports are stale. Only re-analyzed modules get new timestamps. |
+| "Regenerating the architecture docs anyway is safer than deciding whether to" | Only if something they describe moved. Gate on the graph, the purposes, and the issue set — and say out loud what you skipped. |
+| "The race is unlikely, one guard at the end is enough" | Reports are written three steps earlier. Losing at Step 8 then leaves your reports beside the winner's state. |

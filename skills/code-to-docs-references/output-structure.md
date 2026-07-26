@@ -18,7 +18,7 @@ The analysis artifacts written in Phase 1 (see "Analysis Artifacts" below) exist
 |--------------------|---------------------|
 | A module's 7-section analysis report | `_state/modules/<slug>.md` |
 | The full synthesis output | `_state/synthesis.md`, naming the `##` sections needed |
-| One-line purposes of every module (wikilink context) | `_state/synthesis.md` § Module Purposes |
+| One-line purposes of every module (wikilink context) | `module_index` purposes — compact, pass inline |
 | A module's issue prose and before/after snippets | `_state/modules/<slug>.md` § Limitations & Improvements |
 
 Small structured data — the dependency graph, the module list, issue records — is already compact and may be passed inline.
@@ -36,7 +36,7 @@ Dispatch as parallel agents where possible. The Input column is a **reference sp
 | `Architecture/System Overview.md` | **Sonnet** | `_state/synthesis.md` §§ Architecture Narrative, Architecture Type, System-Wide Patterns + `dependency_graph` (inline) | Narrative architecture writing |
 | `Architecture/Dependency Map.md` | **Haiku** | `dependency_graph` + `modules` (inline — already compact) | Data → Mermaid + table transform |
 | `Architecture/System Map.canvas` | **Haiku** | `dependency_graph` + `modules` (inline) | Data → JSON Canvas transform |
-| `Modules/{Name}.md` (×N) | **Sonnet** | `_state/modules/<slug>.md` (all 7 sections) + `_state/synthesis.md` § Module Purposes | One agent per module, parallel |
+| `Modules/{Name}.md` (×N) | **Sonnet** | `_state/modules/<slug>.md` (all 7 sections) + `module_index` name→purpose pairs (inline) for wikilink context | One agent per module, parallel |
 | `Health/Health Summary.md` | **Haiku** | Issue counts by severity/type/module (inline) | Data → Mermaid chart transform |
 | `Health/Limitations.md` + `Health/Code Review.md` | **Sonnet** | `issues` filtered by type (inline) + `_state/modules/<slug>.md` § Limitations & Improvements paths for the modules covered | Requires judgment for framing; the §7 prose supplies the before/after snippets |
 | `Patterns/{Name}.md` (full mode) | **Sonnet** | `_state/synthesis.md` § System-Wide Patterns + report paths of the modules exhibiting the pattern | Pattern identification + writing |
@@ -44,7 +44,7 @@ Dispatch as parallel agents where possible. The Input column is a **reference sp
 | `Cross-Cutting/{Name}.md` (full mode) | **Sonnet** | `_state/synthesis.md` § Cross-Cutting Themes + report paths of the relevant modules | Requires cross-module reasoning |
 | `Documentation.base` | **Haiku** | `module_index` (inline) | Mechanical YAML assembly |
 | `Index.md` | **Haiku** | Project name + timestamp + mode | Template fill (Dataview fallback) |
-| `_state/analysis.json` | **Haiku** | Pass 1 + Pass 2 receipts (inline — receipt-sized by construction) | Mechanical JSON assembly |
+| `_state/analysis.json` | **Haiku** | Pass 1 + Pass 2 receipts (inline) + report paths, for the `files:` frontmatter | Mechanical JSON assembly |
 
 ---
 
@@ -280,11 +280,15 @@ One file per module, holding the seven-section report defined in `analysis-guide
 ---
 module: Scheduler
 slug: scheduler
+purpose: Runs recurring background jobs against Docker hosts on a cron schedule.
 roots:
   - src/lib/server/scheduler/
 language: typescript
 complexity: high
 loc: 2400
+files:
+  - src/lib/server/scheduler/index.ts
+  - src/lib/server/scheduler/tasks/prune.ts
 analyzed-at: 2026-03-29T12:00:00Z
 source-commit: 5c3f0fc
 ---
@@ -322,7 +326,6 @@ source-commit: 5c3f0fc
 ## Architecture Narrative
 ## Architecture Type
 ## System-Wide Patterns
-## Module Purposes
 ## Cross-Cutting Themes
 ## Issue Themes
 ```
@@ -332,11 +335,12 @@ source-commit: 5c3f0fc
 | **Architecture Narrative** | The 3–5 paragraph system description from synthesis step 6 |
 | **Architecture Type** | Classification (monolith / microservices / modular monolith / plugin-based / hybrid) plus justification |
 | **System-Wide Patterns** | Patterns appearing in 3+ modules, each named with the modules exhibiting it |
-| **Module Purposes** | One line per module: `- **Module Name** — one-sentence purpose.` This is the wikilink context for module-doc writers |
 | **Cross-Cutting Themes** | Concerns spanning modules (error handling, auth, real-time transport). Seeds `Cross-Cutting/` in full mode |
 | **Issue Themes** | System-wide issue patterns from synthesis step 7 (e.g. "no error-handling strategy across 4 modules") |
 
-The six `##` headings are exact and fixed, for the same Grep-addressability reason as the module reports. Rewrite this file in full on every generate or update run — it is cheap and always cross-module.
+The five `##` headings are exact and fixed, for the same Grep-addressability reason as the module reports. Rewrite this file in full on every generate or update run — it is cheap and always cross-module.
+
+**One-line module purposes deliberately live in `module_index`, not here.** They are needed by module-doc writers, by the Onboarding agents, and by digest's module inventory — keeping the single copy in the state file means none of those has to open `synthesis.md`, and an update never has to read the previous synthesis back in order to preserve the purposes of modules it did not touch.
 
 ---
 
@@ -352,6 +356,7 @@ The six `##` headings are exact and fixed, for the same Grep-addressability reas
   "module_index": {
     "Module Name": {
       "slug": "module-name",
+      "purpose": "one sentence — what this module is for",
       "roots": ["relative/path/to/module/"],
       "entry_points": ["relative/path/to/module/index.ts"],
       "language": "typescript",
@@ -462,7 +467,7 @@ Before reading `analysis.json` in update or digest mode, validate the following 
 
 Each issue object must have: `id` (string), `module` (string), `type` (string), `severity` (string), `status` (string). Missing or malformed issues should be logged and skipped rather than causing a full abort.
 
-Each `module_index` entry must have `slug` (string), `roots` (non-empty array of strings), and `report` (string). A `module_index` key that is not in `modules`, or a `modules` entry with no `module_index` key, is a validation failure — the two must agree. Two modules sharing a root is **valid** (see "Resolving a Changed File to Its Module"), but two modules sharing a `slug` is not.
+Each `module_index` entry must have `slug` (string), `purpose` (string), `roots` (non-empty array of strings), and `report` (string). A `module_index` key that is not in `modules`, or a `modules` entry with no `module_index` key, is a validation failure — the two must agree. Two modules sharing a root is **valid** (see "Resolving a Changed File to Its Module"), but two modules sharing a `slug` is not.
 
 **A missing `schema_version` or `module_index` is not a validation error.** It identifies a v1 state file, which is handled by migration, not rejection. Only the eight core fields above are mandatory for a state file to be usable.
 

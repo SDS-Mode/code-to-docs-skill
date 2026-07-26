@@ -77,14 +77,27 @@ jq -r '.module_index | to_entries[] | "\(.key)\t\(.value.analyzed_at)\t\(.value.
 
 A carried-forward module whose `analyzed_at` silently advances is a failure: it claims analysis that did not happen and destroys the ability to tell how stale that report is.
 
-### Checkpoint A.5 — Regenerated Cross-Module Outputs Use References
+### Checkpoint A.5 — Cross-Module Outputs Are Gated, and Use References
 
-`System Overview`, `Dependency Map`, `Canvas`, `Health/`, and `Index.md` regenerate on every update. They stay cheap only if their inputs are references.
+The scenario change is a function-body edit: no new imports, no new files. So `graph_changed` and `purposes_changed` are both false, and the architecture projections should be **skipped**.
 
-- [ ] The System Overview agent's prompt names `_state/synthesis.md` sections — it does **not** contain the narrative text or any module report
-- [ ] Dependency Map and Canvas agents receive the graph inline (compact) and are **Haiku**
+- [ ] `Architecture/Dependency Map.md` and `System Map.canvas` were **not** regenerated (dependency graph unchanged) and are byte-identical
+- [ ] `Architecture/System Overview.md` was **not** regenerated (graph and purposes unchanged) and is byte-identical
+- [ ] The skip was **reported**, naming the unchanged signal — e.g. `"skipped System Overview, Dependency Map, System Map (dependency graph and module purposes unchanged)"`
+- [ ] `Health/` regenerated **iff** the merged issue set actually changed; if the edit resolved a known issue, it should have
+- [ ] `Index.md` regenerated (Haiku template fill, keeps the timestamp honest)
+
+For whatever *did* regenerate, references still apply:
+
+- [ ] The System Overview agent's prompt (if dispatched) names `_state/synthesis.md` sections — it does **not** contain the narrative text or any module report
+- [ ] Dependency Map and Canvas agents (if dispatched) receive the graph inline and are **Haiku**
 - [ ] Health writers receive issue records inline plus report **paths** for the modules they cover
-- [ ] `_state/synthesis.md` was rewritten, and its `## Module Purposes` still has one line per module — including the unchanged ones
+- [ ] `_state/synthesis.md` was rewritten **without reading the previous one** — unchanged modules' purposes come from `module_index`, which Step 1 already loaded
+
+Now force the other branch: add an import from one module to another, commit, re-run.
+
+- [ ] `graph_changed` is true, so Dependency Map, Canvas, and System Overview **all** regenerate
+- [ ] Mode auto-selects **full** (new cross-module import — a dependency-structure change)
 
 ### Checkpoint A.6 — Issue Carry-Forward
 
@@ -106,6 +119,31 @@ Re-run the update immediately, with no further changes:
 - [ ] Reports "No changes since last documentation run"
 - [ ] Writes **nothing** — `analysis.json` `timestamp` is unchanged, no session entry appended
 - [ ] Dispatches zero analysis agents
+
+### Checkpoint A.9 — Verification Is Scoped
+
+- [ ] Verification covers the files written this run, not the whole vault
+- [ ] With no deletions or renames, **no** inbound-link sweep was performed
+- [ ] The reported scope is explicit — e.g. `"verified 4 files written this run; no deletions, so no inbound-link sweep needed"`
+- [ ] Frontmatter and wikilinks in the files that *were* written are still fully checked
+
+### Checkpoint A.10 — Concurrency Guard Covers the Whole Run
+
+- [ ] The claim (`git_commit` + `timestamp`) is recorded at Step 1
+- [ ] It is re-checked **before Step 5 writes any report**, not only at Step 8
+- [ ] Simulate a race: after the update starts but before it writes reports, modify `_state/analysis.json`'s `timestamp` externally. The run must abort **before** any `_state/modules/*.md` is written — check their mtimes are unchanged
+- [ ] Simulate a torn run: hand-edit one module's report `source-commit` to disagree with state, then run update. That module is treated as **affected** and re-analyzed rather than carried forward
+
+### Checkpoint A.11 — Deleted Module Cleanup
+
+Delete an entire module from the codebase, commit, and run update.
+
+- [ ] Mode auto-selects **full**
+- [ ] `Modules/{Name}.md` and `_state/modules/<slug>.md` are both **removed**
+- [ ] The module is gone from `modules`, `module_index`, and `files_analyzed`
+- [ ] Edges **pointing at** it are removed from other modules' `dependency_graph` lists
+- [ ] Its issues are marked `resolved` (deletion is positive evidence the code is gone)
+- [ ] Verification swept for inbound `[[wikilinks]]` to the removed title, and any that existed were reported
 
 ---
 
@@ -146,7 +184,7 @@ This is what makes migration cheaper than regeneration, so it is the checkpoint 
 ### Checkpoint B.3 — Migration Output Is Valid v2
 
 - [ ] `_state/modules/<slug>.md` now exists for **every** module, each with all seven `###` sections
-- [ ] `_state/synthesis.md` exists with all six `##` sections
+- [ ] `_state/synthesis.md` exists with all five `##` sections
 - [ ] `schema_version` is `2` and `module_index` has one entry per module with an existing `report` path
 - [ ] Every `files_analyzed` value is now a slug present in `module_index` — no `"analyzed"` placeholders remain
 - [ ] Module **names are unchanged** from the v1 state — the migration derived roots without redrawing boundaries
@@ -172,8 +210,13 @@ Any of these is a skill failure:
 - [ ] **Falls back to full generation on a v1 vault** instead of migrating
 - [ ] **Dispatches Sonnet or Opus for the v1 backfill**
 - [ ] **Pastes a report or the full synthesis into any agent prompt**
-- [ ] **Marks an issue `resolved` without the diff having touched its file/lines**
-- [ ] **Overwrites state without the concurrency guard** — re-reading `analysis.json` and comparing `git_commit`/`timestamp` to the values loaded at the start
+- [ ] **Puts a module's file list in a receipt** rather than the report's `files:` frontmatter — the receipt must be a fixed small size regardless of module size
+- [ ] **Reads the previous `_state/synthesis.md`** — purposes come from `module_index`
+- [ ] **Marks an issue `resolved` without the diff having touched its file/lines** (deleting the whole module is the one exception)
+- [ ] **Writes any report before re-checking the concurrency claim** — losing the race after Step 5 leaves reports beside another run's state
+- [ ] **Carries forward a module whose report `source-commit` disagrees with state** — that is a torn previous run and must be re-analyzed
+- [ ] **Leaves a deleted module's report or doc on disk**, or leaves dangling `dependency_graph` edges pointing at it
+- [ ] **Regenerates a cross-module doc whose gating signal did not change**, or **skips one without reporting** which signal was unchanged
 - [ ] **Deletes or regenerates unchanged module docs**
 
 ---
@@ -205,6 +248,10 @@ Scenario A — v2 incremental
   Unchanged docs byte-identical:   yes / no
   Carried-forward timestamps kept: yes / no        (no = FAIL)
   Issues carried / resolved:       __ / __
+  Cross-module docs skipped:       ____           (and was it reported?)
+  Verification scope:              written-only / full-vault
+  Guard checked before Step 5:     yes / no        (no = FAIL)
+  Receipt carried a file list:     yes / no        (yes = FAIL)
 
 Scenario B — v1 migration
   Migration detected & reported:   yes / no

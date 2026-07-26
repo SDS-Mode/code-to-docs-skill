@@ -158,8 +158,8 @@ This is the cost invariant — check the transcript, not just the output files.
 - [ ] Dependency graph correctly reflects inter-module calls, built from receipt `deps` fields
 - [ ] No cycles detected (or cycles are documented with warning)
 - [ ] Synthesis produces a single coherent architecture narrative
-- [ ] `_state/synthesis.md` is written with all six `##` sections: Architecture Narrative, Architecture Type, System-Wide Patterns, Module Purposes, Cross-Cutting Themes, Issue Themes
-- [ ] `## Module Purposes` has exactly one line per identified module
+- [ ] `_state/synthesis.md` is written with all five `##` sections: Architecture Narrative, Architecture Type, System-Wide Patterns, Cross-Cutting Themes, Issue Themes
+- [ ] `synthesis.md` does **not** duplicate per-module one-liners — every module's `purpose` lives in `module_index`
 - [ ] `_state/analysis.json` is written to vault root
 
 ### State File Validation

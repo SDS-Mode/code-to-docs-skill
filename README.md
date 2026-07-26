@@ -292,8 +292,9 @@ Every agent receives **references** — a report path, named `synthesis.md` sect
 4. Auto-selects quick or full based on change scope
 5. Re-analyzes only affected modules (two-pass, same as generate), rewriting just their reports
 6. Merges new results with existing vault — unchanged module docs preserved, and unchanged modules carried forward by leaving their reports untouched on disk
-7. Updates state file with new commit, merged issues, session entry
-8. Runs full verification across the entire vault
+7. Regenerates cross-module docs only when the dependency graph, module purposes, or issue set actually moved, reporting anything it skipped
+8. Updates state file with new commit, merged issues, session entry
+9. Verifies the files it wrote, plus any file linking to a module it removed
 
 ### Digest (`:digest`)
 

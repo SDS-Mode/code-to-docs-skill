@@ -53,6 +53,7 @@ A **module** is an independent subsystem that can be understood without reading 
 | Field | Content |
 |---|---|
 | Name | Title Case label (e.g., Auth, Payments, Worker Queue) |
+| Purpose | One sentence, under 20 words — what the module is for. Becomes the wikilink context every later agent uses |
 | Slug | Name lowercased, non-alphanumerics collapsed to single hyphens (`Worker Queue` → `worker-queue`, `Packaging & Release` → `packaging-release`) |
 | Root paths | **List** of the narrowest directories covering this module's files, relative to repo root |
 | Language | Primary language of this module |
@@ -83,7 +84,7 @@ Every `Agent()` call in Phase 1 MUST set `model:` to match this table.
 | Issue Analysis (×N) | **opus** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: true` |
 | Synthesis | **orchestrator** | extraction receipts + report paths | `_state/synthesis.md` | — | ≤4 modules, tree-shaped deps |
 | Synthesis | **opus** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | 5+ modules or cyclic deps |
-| State file write | **haiku** | all receipts (inline) | `_state/analysis.json` | confirmation | always |
+| State file write | **haiku** | receipts (inline) + report paths for `files:` | `_state/analysis.json` | confirmation | always |
 
 ### Step 3: Parallel Agent Dispatch
 
@@ -140,11 +141,14 @@ Write your findings to the report path given above, overwriting it if it exists.
 ---
 module: [MODULE_NAME]
 slug: [MODULE_SLUG]
+purpose: <one sentence, under 20 words — what this module is for>
 roots:
   - [one line per root path]
 language: [LANGUAGE]
 complexity: low | medium | high
 loc: <integer — total lines across the files you attributed to this module, excluding tests>
+files:
+  - <one line per file you attributed to this module, relative to the repo root>
 analyzed-at: <current ISO 8601 timestamp>
 source-commit: [GIT_COMMIT_OR_"none"]
 ---
@@ -182,16 +186,19 @@ After writing the file, return ONLY this JSON object and nothing else. No preamb
   "module": "[MODULE_NAME]",
   "slug": "[MODULE_SLUG]",
   "report": "_state/modules/[MODULE_SLUG].md",
+  "purpose": "<the same one-sentence purpose you wrote in the frontmatter>",
   "roots": ["[MODULE_ROOT_PATHS]"],
   "entry_points": ["..."],
   "language": "[LANGUAGE]",
   "complexity": "low | medium | high",
   "loc": <integer>,
-  "files": ["every file path you analyzed, relative to the repo root"],
+  "file_count": <integer — how many files you listed in the frontmatter>,
   "deps": ["names of other project modules this one depends on"],
   "escalate": <true | false>,
   "escalate_reason": "<short reason, or null if escalate is false>"
 }
+
+Do NOT put the file list in the receipt — it belongs in the report frontmatter, where a later agent reads it. The receipt must stay a fixed small size no matter how many files the module has.
 
 Set `escalate` to true if ANY of the following hold, and name which one in `escalate_reason`:
 - you rated complexity High
@@ -208,8 +215,11 @@ Otherwise set `escalate` to false and `escalate_reason` to null.
 | `report` | The Pass 2 prompt is a path, not a pasted report |
 | `deps` | The dependency graph builds from receipts alone — no report reads during synthesis |
 | `escalate` / `escalate_reason` | Resolves the Pass 2 model tier without the orchestrator reading the report's Complexity and Architecture prose to judge it. The agent that read the code makes the call |
+| `purpose` | Populates `module_index`, which is the single source for module one-liners — used as wikilink context by module-doc writers and as digest's module inventory, so neither ever opens a report |
 | `roots` / `entry_points` / `language` / `complexity` / `loc` | Populate `module_index` directly |
-| `files` | Populates `files_analyzed` as path → slug, so update can map a changed file to its module by lookup |
+| `file_count` | A sanity check only. The **file list itself lives in the report frontmatter**, not here |
+
+**Why the file list is deliberately not in the receipt.** Every other receipt field is O(1) in the size of the module, so a receipt costs roughly the same whether the module has 4 files or 400. A file list is O(module size), and receipts from every module land in the orchestrator's context at once — on a large repo that is tens of thousands of tokens of file paths at Opus, which is precisely the cost this design exists to avoid. The state-file writer needs the mapping, so it reads the `files:` frontmatter out of each report at Haiku instead.
 
 ---
 
@@ -311,9 +321,9 @@ When dispatching the Opus agent, pass the receipt list inline (they are small) a
 6. **Generate the top-level architecture narrative** — a 3–5 paragraph description of the system that a new engineer could read to understand how the pieces fit together.
 7. **Aggregate limitations and improvements** — from the Pass 2 issue records (already in hand), deduplicate, identify system-wide themes (e.g., "no error handling strategy across 4 modules"), and rank by severity. This feeds the Health/ directory in Phase 2.
 
-**Write `_state/synthesis.md`** — record the results of steps 3, 5, 6, and 7 in the six-section format defined in `output-structure.md` "Analysis Artifacts", including a one-line purpose for every module under `## Module Purposes`. This file is what Phase 2's narrative agents read; it exists so no agent is ever handed "the full synthesis" as a payload. Write it in full on every run.
+**Write `_state/synthesis.md`** — record the results of steps 3, 5, 6, and 7 in the five-section format defined in `output-structure.md` "Analysis Artifacts". This file is what Phase 2's narrative agents read; it exists so no agent is ever handed "the full synthesis" as a payload. Write it in full on every run. Per-module one-liners are **not** written here — they live in `module_index`.
 
-**Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Its input is the **receipts**, not the synthesis: the Pass 1 receipts supply `module_index` and `files_analyzed`, and the Pass 2 issue records supply `issues`. Have it populate **every** field of the state schema defined in `output-structure.md` "State File" — including `project`, `issues`, and `sessions`. The `issues` and `sessions` arrays are **required** (use `[]` only when genuinely empty); a state file missing them fails `output-structure.md` "State File Validation", which breaks the next update and the next digest (aborts). Shape:
+**Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Its input is the **receipts plus the report paths**, not the synthesis: the Pass 1 receipts supply `module_index`, the reports' `files:` frontmatter supplies `files_analyzed`, and the Pass 2 issue records supply `issues`. Give the agent the receipt list inline and instruct it to read each report's frontmatter for the file list — that keeps the file paths out of the orchestrator entirely. Have it populate **every** field of the state schema defined in `output-structure.md` "State File" — including `project`, `issues`, and `sessions`. The `issues` and `sessions` arrays are **required** (use `[]` only when genuinely empty); a state file missing them fails `output-structure.md` "State File Validation", which breaks the next update and the next digest (aborts). Shape:
 
 ```json
 {
@@ -352,10 +362,12 @@ Field-by-field, this is a direct transform of receipt data — no judgment, whic
 
 | State field | Source |
 |-------------|--------|
-| `module_index` entries | Pass 1 receipt `roots` / `entry_points` / `language` / `complexity` / `loc`, plus the settled module name from synthesis step 4 |
-| `files_analyzed` | Pass 1 receipt `files`, each path mapped to that receipt's `slug` |
+| `module_index` entries | Pass 1 receipt `purpose` / `roots` / `entry_points` / `language` / `complexity` / `loc`, plus the settled module name from synthesis step 4 |
+| `files_analyzed` | The `files:` frontmatter of each report (read at Haiku), each path mapped to that report's `slug` |
 | `dependency_graph` | Pass 1 receipt `deps` |
 | `issues` | Pass 2 issue records, each with the module name added and `status: "open"` |
+
+Cross-check each report's `file_count` receipt field against the number of `files:` entries it actually read, and report any mismatch rather than silently writing a partial `files_analyzed` — an incomplete ownership map degrades the next update into re-surveying.
 
 On a baseline generate run, populate `issues` from the Pass 2 records (each with `status: "open"`) and `sessions` with one `"generate"` entry — do not ship the arrays empty if issues were found. See `output-structure.md` for the full schema description and incremental contract details.
 
@@ -448,7 +460,9 @@ This section applies when invoked via `code-to-docs:code-to-docs-update`. For ba
 4. **Check the schema version.** If `schema_version` or `module_index` is absent, this is a v1 state file — run the one-time migration in `output-structure.md` "Schema Migration (v1 → v2)" before continuing, and report it to the user. Do **not** fall back to a full generate; the migration backfills with Haiku only.
 5. Extract: `git_commit` (the commit hash from the last run), `modules`, `module_index`, `dependency_graph`, `files_analyzed`, `issues`
 
-Load **only** the state file in this step. Do not read `_state/modules/*.md`, `_state/synthesis.md`, or any `Modules/*.md` — nothing in the update flow needs their contents in the orchestrator's context.
+Load **only** the state file in this step. Do not read `_state/synthesis.md` or any `Modules/*.md` at any point in the update flow — nothing in it needs their contents in the orchestrator's context.
+
+The one permitted touch of a report is a **frontmatter grep** in Step 3 for `source-commit`, to detect a torn previous run. That reads one line per module, never a section body.
 
 ### Update Step 2: Diff
 
@@ -521,16 +535,16 @@ Synthesis in update mode works from the same inputs as baseline — receipts and
 Assemble the synthesis input as:
 
 - **Affected modules** — the fresh Pass 1 receipts from Step 5
-- **Carried-forward modules** — their `module_index` entries (name, slug, root, complexity, loc, report path) plus their `dependency_graph` edges, all already loaded from state in Step 1
+- **Carried-forward modules** — their `module_index` entries (name, slug, purpose, roots, complexity, loc, report path) plus their `dependency_graph` edges, all already loaded from state in Step 1
 - **Report paths** for every module, affected or not, so the synthesis agent can read one if the narrative genuinely needs its internals
 
-This is the step where the old flow leaked the most: there is no need to read an unchanged module's report or its generated doc to include it in the system story. Its name, purpose, dependencies, and complexity are all in state, and `_state/synthesis.md` § Module Purposes already carries the one-line purpose from last run.
+This is the step where the old flow leaked the most: there is no need to read an unchanged module's report, its generated doc, **or the previous `_state/synthesis.md`** to include it in the system story. Its name, purpose, dependencies, and complexity are all in `module_index`, which Step 1 already loaded.
 
 Run the same synthesis procedure as Step 4, but with awareness of what changed:
 
 1. Rebuild dependency graph — fresh `deps` from the Step 5 receipts, carried-forward edges from the state's `dependency_graph`
 2. Compare new dependency graph to previous — flag any structural changes
-3. Regenerate architecture narrative (always — even small changes can shift the system story) and **rewrite `_state/synthesis.md` in full**, preserving the § Module Purposes lines of unchanged modules
+3. Regenerate the architecture narrative and **rewrite `_state/synthesis.md` in full** — from receipts and `module_index`, never by reading the previous synthesis back
 4. Merge issues:
    - Issues in re-analyzed modules that the new analysis still reports: keep/replace with the new details, status `open`
    - Issues in unchanged modules: carry forward with status `open`
@@ -538,30 +552,57 @@ Run the same synthesis procedure as Step 4, but with awareness of what changed:
 
 ### Update Step 7: Selective Generation
 
-Use the same Phase 2 generation flow and the same dispatch table in `output-structure.md`, including its reference-based Input column — but selectively:
+Use the same Phase 2 generation flow and the same dispatch table in `output-structure.md`, including its reference-based Input column — but selectively.
+
+**First compute three change signals** from Step 6's merge. They are cheap comparisons over data already in hand, and they gate the cross-module outputs:
+
+| Signal | True when |
+|--------|-----------|
+| `graph_changed` | The rebuilt `dependency_graph` differs from the stored one, **or** the module set changed (added/removed) |
+| `issues_changed` | The merged `issues` array differs from the stored one in any element — added, removed, or a changed `status`/`severity` |
+| `purposes_changed` | Any module's `purpose` in `module_index` differs from the stored one |
 
 | Output | When to regenerate |
 |--------|-------------------|
-| `Architecture/System Overview.md` | Always (cross-module, cheap to regenerate) |
-| `Architecture/Dependency Map.md` | Always |
-| `Architecture/System Map.canvas` | Always |
+| `Architecture/System Overview.md` | Only if `graph_changed` or `purposes_changed` |
+| `Architecture/Dependency Map.md` | Only if `graph_changed` |
+| `Architecture/System Map.canvas` | Only if `graph_changed` |
 | `Modules/{Name}.md` for affected modules | Always |
 | `Modules/{Name}.md` for unchanged modules | **Never** — preserve existing |
-| `Health/` (all files) | Always (depends on merged issues) |
+| `Health/Health Summary.md` | Only if `issues_changed` |
+| `Health/Limitations.md`, `Health/Code Review.md` | Only if `issues_changed` |
 | `Patterns/` (full mode) | Only if auto-selected full |
 | `Onboarding/` (full mode) | Only if auto-selected full |
 | `Cross-Cutting/` (full mode) | Only if auto-selected full |
-| `Index.md` | Always (cheap, ensures consistency) |
+| `Index.md` | Always (Haiku template fill; keeps the timestamp honest) |
 | `_state/synthesis.md` | Always (written in Step 6) |
 | `_state/modules/<slug>.md` for affected modules | Always (written in Step 5) |
 | `_state/modules/<slug>.md` for unchanged modules | **Never** — leave untouched, including frontmatter |
 | `_state/analysis.json` | Always (must reflect new state) |
 
-The always-regenerated cross-module outputs stay cheap precisely because their inputs are references: System Overview reads `_state/synthesis.md`, Dependency Map and Canvas take the graph inline, and the Health writers take issue records inline plus report paths for the modules they cover.
+**Why gate rather than always regenerate.** These outputs are *projections* of the graph, the purposes, and the issue set. If none of those moved, regenerating produces near-identical prose at Sonnet cost and churns the vault's diff for no reader benefit. The common update — a bug fix inside one module that changes no imports — leaves `graph_changed` false, so Dependency Map, Canvas, and System Overview are all correctly skipped.
+
+The signals are deliberately **structural**, not "did any file change": the architecture narrative describes the module set, their purposes, and how they connect, so those are exactly the inputs whose movement should trigger a rewrite. Note `issues_changed` fires on a resolved issue too, so a fix that closes a known issue *does* refresh `Health/` — which is right.
+
+Report what was skipped and why: `"Regenerated 3 files; skipped System Overview, Dependency Map, System Map (dependency graph and module purposes unchanged)."` A silent skip is indistinguishable from a bug.
+
+When any gating comparison is uncertain — a malformed stored graph, an unreadable previous value — **regenerate**. The cost of a redundant Sonnet call is far below the cost of a stale architecture doc.
+
+**Deletions.** When a module is removed (detected in Step 3, which forces full mode), clean up every artifact that referred to it, in this order:
+
+1. Delete `Modules/{Name}.md` and `_state/modules/<slug>.md`
+2. Remove its entry from `modules`, `module_index`, and `dependency_graph` — including edges *pointing at* it from other modules' dependency lists
+3. Drop its files from `files_analyzed`
+4. Keep its `issues`, but mark them `resolved` — the code they referenced is gone, which is positive evidence of removal and the one case where the Step 6 evidence rule is satisfied by deletion rather than by a diff touching the lines
+5. Note the removed title so Step 9 can sweep for now-broken inbound `[[wikilinks]]` from unchanged files
+
+Skipping step 1 leaves an orphan report that every future update dutifully carries forward as a module that no longer exists.
 
 ### Update Step 8: Update State File
 
-**Guard against a concurrent write first (optimistic concurrency).** Re-read `_state/analysis.json` and compare its `git_commit` and `timestamp` to the values loaded in Step 1. If either changed, another update ran while this one was in progress (for example a hook-triggered update racing a manual one) — abort without writing and tell the user to re-run, rather than clobber the other run's merged `issues` and `sessions` history.
+**Re-check the concurrency guard (final check).** Re-read `_state/analysis.json` and compare its `git_commit` and `timestamp` to the values loaded in Step 1. If either changed, another update ran while this one was in progress (for example a hook-triggered update racing a manual one) — abort without writing and tell the user to re-run, rather than clobber the other run's merged `issues` and `sessions` history.
+
+This is the **second** check; the first happens before Step 5 writes any report (see "Concurrency Across the Whole Run" below). Checking only here would let a losing run overwrite reports it then never records in state.
 
 Then write `_state/analysis.json` with:
 - `schema_version` → `2`
@@ -578,4 +619,35 @@ A carried-forward module whose `analyzed_at` silently advances to now is a bug: 
 
 ### Update Step 9: Verify
 
-Same as Phase 3 — Haiku agent checks wikilinks and frontmatter across the entire vault (not just changed files).
+Dispatch a **Haiku** agent to check wikilinks and frontmatter, scoped as described in "Scoping Verification" below.
+
+---
+
+## Concurrency Across the Whole Run
+
+Once analysis reports became durable files, the state file stopped being the only thing a concurrent run can corrupt. Reports are written in Step 5 but state is written in Step 8, so a guard that only fires at Step 8 leaves a window: two updates both re-analyze module M, both overwrite `_state/modules/m.md`, and the loser aborts at Step 8 — leaving **the loser's report beside the winner's state**. The vault then claims module M was analyzed at the winner's commit while its report describes a different one.
+
+Guard the whole run, not just the write:
+
+1. **Claim (Step 1).** After loading and validating state, record the `git_commit` and `timestamp` you loaded. These are the run's claim token.
+2. **Re-check before writing anything (before Step 5).** Re-read `_state/analysis.json`. If `git_commit` or `timestamp` differs from the claim, another run got there first — abort **before** dispatching any analysis agent, so no report is written and nothing is corrupted. This is the cheap place to lose a race.
+3. **Re-check before writing state (Step 8).** As described above.
+
+**Detecting a torn run.** A report's `source-commit` frontmatter is the repair signal: for any module the state lists as analyzed at commit X, its report should record `source-commit: X`. A mismatch means a previous run was interrupted between Step 5 and Step 8. Treat that module as **affected** and re-analyze it, rather than carrying forward a report that does not match what state claims. Check this during Step 3 when building the affected-module list — it costs one frontmatter grep per module and turns a silent inconsistency into a self-healing one.
+
+---
+
+## Scoping Verification
+
+Verification checks two things: every `[[wikilink]]` resolves to an existing file, and every file has complete frontmatter. On a baseline generate run, that means the whole vault — every file is new.
+
+On an **update**, a full-vault sweep re-reads files that provably cannot have changed. Only two sets can newly break:
+
+| Set | Why it can break | How to collect it |
+|-----|------------------|-------------------|
+| Files written this run | New or rewritten content can contain a bad link or malformed frontmatter | The generation step already knows exactly which files it wrote |
+| Files linking to a **removed** title | An unchanged file's link breaks when its target is deleted or renamed | Only when a module was deleted or renamed: grep the vault for `[[<removed title>]]` |
+
+If no file was deleted or renamed, the second set is empty and verification covers only what was written. Report the scope in the summary — "verified 4 files written this run; no deletions, so no inbound-link sweep needed" — so a narrow check is never mistaken for a full one.
+
+**Do not narrow further than this.** In particular, do not skip verification because "the agent that wrote the file was careful" — the whole point is that generation is non-deterministic. And when in doubt about whether a rename occurred, run the full sweep; it is Haiku and a missed broken link is worse than a redundant read.

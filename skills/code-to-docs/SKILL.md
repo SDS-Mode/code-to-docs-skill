@@ -54,7 +54,7 @@ This skill uses three model tiers to balance cost and quality. Select tier based
 Two conventions make this work, and they apply to every phase:
 
 - **Agents write artifacts and return receipts.** An agent that produces a document writes it to its destination and returns a short structured summary — never the document itself, which would land in the orchestrator's context whether needed there or not.
-- **Phase 1 leaves durable artifacts to point at:** `_state/modules/<slug>.md` (one seven-section report per module) and `_state/synthesis.md` (cross-module facts in six fixed sections). Phase 2 agents read these by path.
+- **Phase 1 leaves durable artifacts to point at:** `_state/modules/<slug>.md` (one seven-section report per module) and `_state/synthesis.md` (cross-module facts in five fixed sections). Phase 2 agents read these by path.
 
 See `../code-to-docs-references/output-structure.md` "The Reference-Passing Rule" for the reference table and "Analysis Artifacts" for the file formats.
 
@@ -84,7 +84,7 @@ Dispatch in parallel where possible:
 
 1. **Sonnet agent**: `Architecture/System Overview.md` — reads `_state/synthesis.md` §§ Architecture Narrative, Architecture Type, System-Wide Patterns
 2. **Haiku agents** (parallel): `Architecture/System Map.canvas`, `Architecture/Dependency Map.md`, `Health/Health Summary.md` (severity charts), `Documentation.base`, `Index.md` — mechanical transforms over the dependency graph, `module_index`, and issue counts, all compact enough to pass inline
-3. **Sonnet agents** (parallel, one per module): `Modules/{Name}.md` — each is given the **path** to its module's `_state/modules/<slug>.md` plus `_state/synthesis.md` § Module Purposes for wikilink context
+3. **Sonnet agents** (parallel, one per module): `Modules/{Name}.md` — each is given the **path** to its module's `_state/modules/<slug>.md` plus the `module_index` name→purpose pairs (inline, one line each) for wikilink context
 4. **Sonnet agent**: `Health/Limitations.md` and `Health/Code Review.md` — issue records inline plus the report paths whose § Limitations & Improvements supplies the before/after snippets. `Health/Health Summary.md` is a mechanical chart transform — it is a **Haiku** task in step 2, per the authoritative Phase 2 dispatch table in `output-structure.md`, not a Sonnet task.
 5. (Full mode) **Sonnet agents**: `Patterns/`, `Onboarding/`, `Cross-Cutting/` — each reads the `_state/synthesis.md` sections named in the dispatch table, plus report paths for the modules involved
 
@@ -94,9 +94,9 @@ Dispatch in parallel where possible:
 
 | Agent | Model | Input | Output | Condition |
 |-------|-------|-------|--------|-----------|
-| Verification | **haiku** | vault file list | broken links + frontmatter report | always |
+| Verification | **haiku** | vault file list (generate) / files written + inbound links to deletions (update) | broken links + frontmatter report | always |
 
-1. **Haiku agent**: Verify every `[[wikilink]]` resolves to an existing generated file, verify every file has complete frontmatter
+1. **Haiku agent**: Verify every `[[wikilink]]` resolves to an existing generated file, verify every file has complete frontmatter. On a baseline generate this is the whole vault; on an update it is scoped per `../code-to-docs-references/analysis-guide.md` "Scoping Verification"
 2. Report: file count, module count, mode, broken links (if any)
 
 ---

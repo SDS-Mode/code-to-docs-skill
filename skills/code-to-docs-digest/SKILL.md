@@ -67,10 +67,10 @@ Read:
 
 | Vault has | Source for non-scoped module overviews |
 |-----------|----------------------------------------|
-| `_state/synthesis.md` (v2) | Its `## Module Purposes` section — **one file read covers every module**, one line each |
-| No `_state/synthesis.md` (v1) | Fall back to per-module extraction: the `### What Is This?` paragraph under `## Beginner`, plus frontmatter `complexity`/`status` |
+| `module_index` (v2) | Each entry's `purpose` and `complexity` — **already loaded in Step 2, so this costs no extra reads at all** |
+| No `module_index` (v1) | Fall back to per-module extraction: the `### What Is This?` paragraph under `## Beginner`, plus frontmatter `complexity`/`status` |
 
-Prefer the v2 path whenever the file exists: it replaces N partial document reads with a single read and is already written in exactly the one-line-per-module shape this step needs. Do **not** load the whole `## Beginner` section (prerequisites, key concepts, walkthrough, example) for non-scoped modules on either path — it is far larger than an overview and blows the token budget.
+Prefer the v2 path whenever `module_index` is present: the whole non-scoped inventory comes free from a file Step 2 already read, replacing N partial document reads with zero. Do **not** load the whole `## Beginner` section (prerequisites, key concepts, walkthrough, example) for non-scoped modules on either path — it is far larger than an overview and blows the token budget.
 
 ### Step 5: Present Context Summary
 
@@ -88,7 +88,7 @@ These are **soft, best-effort targets** — the skill has no token counter, so t
 
 | Configuration | Soft target | Proxy to stay under it |
 |---------------|-------------|------------------------|
-| Default (no flags) | ~3K tokens | Non-scoped module overviews ≤ ~6 lines each (one line each via `_state/synthesis.md`); include only the last ~3 sessions |
+| Default (no flags) | ~3K tokens | Non-scoped module overviews ≤ ~6 lines each (one line each via `module_index`); include only the last ~3 sessions |
 | `--scope` specified | ~6K tokens | Full docs only for scoped modules; ~6-line overviews for the rest |
 | `--focus all` | ~10K tokens | Load all focus files, but truncate the oldest session history first if the summary grows large |
 
@@ -103,6 +103,6 @@ Do NOT do any of the following:
 - **Writing any files** — this skill is strictly read-only. That includes migrating a v1 state file: read it as-is via the fallbacks and leave it alone
 - **Running generation or analysis** — if the user wants updates, suggest `/code-to-docs:code-to-docs-update` instead
 - **Loading all modules without `--scope` or `--focus all`** — only load overviews by default to stay within token budget
-- **Reading every `Modules/{Name}.md` to build the module inventory** when `_state/synthesis.md` exists — its `## Module Purposes` section is one read for all of them
+- **Reading every `Modules/{Name}.md` to build the module inventory** when `module_index` is present — it already carries every module's purpose and complexity, at no extra read
 - **Reading `_state/modules/*.md` reports** — those are analysis internals for generate/update. Digest presents the reader-facing vault
 - **Using a non-Haiku model** — this is a simple read-and-present task; Haiku is sufficient
