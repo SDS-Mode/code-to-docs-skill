@@ -152,7 +152,10 @@ fi
 # (the new one does not exist yet), so no filtering is needed — the old `grep -v "v$NEW_VERSION"`
 # exited 1 whenever that tag was the only one, which `pipefail` turned into a silent abort.
 
-PREV_TAG=$(git -C "$REPO_ROOT" tag --sort=-v:refname | head -1)
+# `git tag … | head -1` would reintroduce the same class of bug this section exists to fix: once
+# the tag list outgrows the pipe buffer, `head` exits first, `git` takes SIGPIPE (141), and
+# `pipefail` promotes that to an abort. `for-each-ref --count=1` needs no pipe at all.
+PREV_TAG=$(git -C "$REPO_ROOT" for-each-ref --sort=-v:refname --count=1 --format='%(refname:short)' refs/tags)
 SINCE_LABEL="${PREV_TAG:-the initial commit}"
 
 if [[ -n "$PREV_TAG" ]]; then
@@ -166,7 +169,9 @@ if [[ -n "$PREV_TAG" ]]; then
         echo "         between them were never released, and these notes will span $PREV_TAG..HEAD."
     fi
 else
-    CHANGELOG=$(git log --pretty=format:"- %s" --no-merges | head -20)
+    # --max-count rather than `| head -20`, for the SIGPIPE reason above. This branch runs on a
+    # first release, where the history is exactly as likely to be long as short.
+    CHANGELOG=$(git log --max-count=20 --pretty=format:"- %s" --no-merges)
 fi
 
 if [[ -z "$CHANGELOG" ]]; then
