@@ -151,13 +151,14 @@ The prompts above carry *module facts*, which are small and belong inline. What 
 - [ ] No Pass 1 prompt contains another module's analysis
 
 **Pass 1 returns:**
-- [ ] All 5 returns are receipt-shaped: a small JSON object with `report`, `roots`, `entry_points`, `language`, `complexity`, `loc`, `files`, `deps`, `escalate`
+- [ ] All 5 returns are receipt-shaped: a small JSON object with `report`, `purpose`, `roots`, `entry_points`, `language`, `complexity`, `loc`, `file_count`, `deps`, `escalate`. **No `files` array** — the file list belongs in the report frontmatter
+- [ ] Every `deps` entry is an exact module name from the supplied project module list (`metrics`, `pipeline`, `storage`, `cache`, `transport`) — not a file path or an external command
 - [ ] No return value contains `###` report sections
 - [ ] `escalate` is `true` for pipeline (~1200 LOC) and transport (~1100 LOC, WebSocket concurrency); check each receipt's `escalate_reason` names the triggering condition
 
 **Pass 2 prompts:**
 - [ ] Each contains the **path** `_state/modules/{slug}.md` — grep the transcript; **zero** Pass 2 prompts contain a pasted extraction report
-- [ ] Each module's Pass 2 model matches its receipt's `escalate` flag: Opus for pipeline and transport, Sonnet for metrics, storage, cache
+- [ ] Each module's Pass 2 model matches `escalate OR loc > 1000 OR complexity == "high"`, recomputed from the receipt: Opus for pipeline (1200 LOC) and transport (1100 LOC) **even if their agents returned `escalate: false`**, Sonnet for metrics, storage, cache
 - [ ] The orchestrator did not read any `_state/modules/*.md` between Pass 1 and Pass 2 in order to make the tier decision — the flag comes from the receipt
 
 **Synthesis:**

@@ -16,7 +16,9 @@ Before any deep reading, gather the lay of the land.
 4. Read the primary manifest (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, or a non-code manifest such as `.claude-plugin/marketplace.json`, `action.yml`, or a docs-site config) — extract the dependency list and available scripts
 5. Identify entry points: main files, index files, server startup files, CLI entry points
 
-> **Docs-as-source / config-as-source fallback.** Some repos have little or no traditional source — e.g. prompt/skill libraries (`SKILL.md` + Markdown), infrastructure-as-code, GitHub Actions, or documentation sites. When the language globs and standard manifests come up empty, treat the project's primary artifacts as its source: Markdown/YAML/JSON instruction or config files, shell scripts, templates. Modules are then directories of related artifacts (e.g. one skill = one module), and test-file/binary exclusions that don't apply are simply skipped. The rest of the analysis proceeds unchanged.
+> **Docs-as-source / config-as-source fallback.** Some repos have little or no traditional source — e.g. prompt/skill libraries (`SKILL.md` + Markdown), infrastructure-as-code, GitHub Actions, or documentation sites. When the language globs and standard manifests come up empty, treat the project's primary artifacts as its source: Markdown/YAML/JSON instruction or config files, shell scripts, templates. Modules are then directories of related artifacts (e.g. one skill = one module). The rest of the analysis proceeds unchanged.
+>
+> **Prose test scenarios still count as tests.** In a docs-as-source repo a `tests/` directory may hold Markdown rather than code — manual scenarios, checklists, fixtures. Those remain **out of scope** under the test-file exclusion: analysis documents the thing being tested, not the tests. Exclude them and say so in the survey output, so a reader can see the choice was made deliberately rather than missed.
 
 **Record the following before proceeding:**
 
@@ -119,8 +121,10 @@ Do not read files outside this module's root paths unless they define types or i
 - **Language:** [LANGUAGE]
 - **Entry points:** [COMMA_SEPARATED_ENTRY_POINT_PATHS]
 - **Known dependencies on other modules:** [LIST_OR_"none known"]
+- **The complete list of module names in this project:** [ALL_MODULE_NAMES]
 - **Write your report to:** [VAULT_PATH]/_state/modules/[MODULE_SLUG].md
 - **Source commit:** [GIT_COMMIT_OR_"none"]
+- **Timestamp to record:** [CURRENT_ISO_8601] — use this verbatim; do not try to determine the current time yourself
 
 ## Instructions
 
@@ -136,7 +140,11 @@ Work in this order:
 
 ## Step 1 — Write the report file
 
-Write your findings to the report path given above, overwriting it if it exists. The file has this exact frontmatter followed by exactly the six sections below. Use the exact headings shown — a later agent greps for these headings to read one section without reading the whole file.
+Write your findings to the report path given above, overwriting it if it exists. The file has this exact frontmatter followed by exactly the six sections below.
+
+**Each section is preceded by an HTML-comment marker (`<!-- c2d:sN -->`). Emit the markers exactly as shown.** They are how a later agent locates one section without reading the whole file, and they must each appear exactly once in the file.
+
+**If your prose needs to mention one of these section names** — for example when documenting a schema that defines them — write it inline in backticks (`` `### Dependencies` ``), never as a real heading, and never emit a `<!-- c2d:` marker inside prose. A duplicated heading or marker makes the section unaddressable and silently corrupts the report.
 
 ---
 module: [MODULE_NAME]
@@ -149,19 +157,23 @@ complexity: low | medium | high
 loc: <integer — total lines across the files you attributed to this module, excluding tests>
 files:
   - <one line per file you attributed to this module, relative to the repo root>
-analyzed-at: <current ISO 8601 timestamp>
+analyzed-at: [CURRENT_ISO_8601]
 source-commit: [GIT_COMMIT_OR_"none"]
 ---
 
+<!-- c2d:s1 -->
 ### Architecture
 Describe the internal structure of this module. What is the top-level design pattern (MVC, service/repository, functional pipeline, actor model, etc.)? How are files organized within the module? Where does control flow enter and exit?
 
+<!-- c2d:s2 -->
 ### Public API
 List every symbol this module exports that is consumed by other modules: function signatures, class names with their public methods, exported types/interfaces, HTTP routes or event names if applicable. Format each entry as a code-fenced signature with a one-line description.
 
+<!-- c2d:s3 -->
 ### Internal Patterns
 Describe patterns used internally that are not visible from outside (e.g., caching strategies, retry logic, internal event bus, singleton instances, factory functions). Note any patterns that deviate from the surrounding codebase conventions.
 
+<!-- c2d:s4 -->
 ### Dependencies
 List all external dependencies in two groups:
 1. **Other project modules** — module name and what is imported
@@ -169,10 +181,12 @@ List all external dependencies in two groups:
 
 Do not list standard library imports.
 
+<!-- c2d:s5 -->
 ### Complexity
 Rate overall complexity: Low / Medium / High.
 Provide a one-paragraph justification. Identify the single most complex file or function and explain why.
 
+<!-- c2d:s6 -->
 ### Key Files
 List the 3–7 files most important to understanding this module. For each, provide the path and a one-sentence description of its role.
 
@@ -193,19 +207,25 @@ After writing the file, return ONLY this JSON object and nothing else. No preamb
   "complexity": "low | medium | high",
   "loc": <integer>,
   "file_count": <integer — how many files you listed in the frontmatter>,
-  "deps": ["names of other project modules this one depends on"],
+  "deps": ["module names this one depends on — each MUST be copied verbatim from the project module list above"],
   "escalate": <true | false>,
   "escalate_reason": "<short reason, or null if escalate is false>"
 }
 
 Do NOT put the file list in the receipt — it belongs in the report frontmatter, where a later agent reads it. The receipt must stay a fixed small size no matter how many files the module has.
 
+`deps` rules — these are strict, because the dependency graph is built directly from this field:
+- Every entry MUST be an exact string from the project module list given above. Copy it character for character.
+- Do NOT use file paths, directory names, or slugs. `code-to-docs-references/analysis-guide.md` and `code-to-docs` are wrong; the module *name* is right.
+- Do NOT list third-party packages or external commands (`git`, `sed`, `jq`) here — those belong in the Dependencies section of the report, not in `deps`.
+- Omit yourself. Return `[]` if this module depends on no other project module.
+
 Set `escalate` to true if ANY of the following hold, and name which one in `escalate_reason`:
 - you rated complexity High
-- the module exceeds 1000 lines of code
-- the module involves concurrency, shared mutable state, async/sync bridging, or security-sensitive logic (auth, crypto, input validation, permissions)
+- the module exceeds 1000 lines of code — compare against the `loc` you just computed
+- the module involves concurrency, shared mutable state, async/sync bridging, or security-sensitive logic (auth, crypto, input validation, permissions, writing user config files, shell escaping)
 
-Otherwise set `escalate` to false and `escalate_reason` to null.
+Otherwise set `escalate` to false and `escalate_reason` to null. Keep `escalate_reason` to one short clause.
 ```
 
 **Why the receipt carries these fields.** Each one removes a downstream read the orchestrator would otherwise have to do:
@@ -232,14 +252,24 @@ The agent **appends** section 7 to the same report file and returns structured i
 - The report file ends up holding the complete seven-section report, at one known path, ready for Phase 2 and for carry-forward on the next update.
 - The returned issue records are exactly the shape `analysis.json.issues` needs, so **the issues array assembles by concatenating Pass 2 returns** — no prose re-parsing, and the state-file writer never needs the synthesis.
 
-**Model selection for Pass 2:** read `escalate` from the module's Pass 1 receipt.
+**Model selection for Pass 2.** Compute it from the receipt, but do **not** take `escalate` at face value:
 
-| Receipt value | Model |
-|---------------|-------|
-| `escalate: true` | Opus |
-| `escalate: false` | Sonnet |
+```
+escalate_final =  receipt.escalate
+              OR  receipt.loc > 1000
+              OR  receipt.complexity == "high"
+```
 
-The Pass 1 agent sets `escalate` from the same conditions that previously required judgment here — High complexity, >1000 LOC, or concurrency / shared mutable state / security-sensitive logic. It sets that flag having actually read the code, so **do not re-derive the tier by reading the report's prose.** If a receipt is missing or malformed, default to Opus and note it.
+| `escalate_final` | Model |
+|------------------|-------|
+| true | Opus |
+| false | Sonnet |
+
+**Why the recomputation.** Two of the three escalation conditions are objective and are *already in the receipt* — LOC and the complexity rating. The third (concurrency, shared mutable state, security-sensitive logic) is a judgment only the agent that read the code can make, so that one is taken on trust. Recomputing the objective two costs nothing and closes a real failure: on the first live run of this pipeline, a Haiku agent reported `loc: 1682` and `escalate: false` in the same receipt, which would have sent the largest and densest module in the codebase to Sonnet. Extraction agents are the cheapest tier by design; do not make them the sole arbiter of arithmetic.
+
+Still **do not re-derive the tier by reading the report's prose** — everything needed is in the receipt. If a receipt is missing or malformed, default to Opus and note it.
+
+**Parse receipts leniently.** Agents wrap JSON in ``` fences and sometimes add a line of preamble despite being told not to. Extract the first JSON object or array in the response rather than requiring a bare value, and if a required field is missing, treat that module as needing Opus rather than guessing.
 
 **Issue Analysis Agent Prompt Template:**
 
@@ -262,12 +292,13 @@ You are reviewing a module for limitations, bugs, risks, and improvement opportu
 5. Review the Complexity section — if a specific file or function was flagged, read it directly (Grep first if >500 lines) to assess whether the complexity is warranted or indicates a problem.
 6. If the report mentions concurrency, async/sync bridging, shared state, or security-sensitive operations, read the relevant code sections to assess race conditions, deadlock potential, and data integrity risks.
 
-Only read source files when verifying a specific concern identified from the report. Do not re-read the entire module.
+Only read source files when verifying a specific concern identified from the report. Do not re-read the entire module, and do not read files outside this module's root paths — a report that cites another module's files, or the project's own test scenarios, has strayed outside its boundary.
 
 ## Step 1 — Append your section to the report
 
-Append the following section to the END of the extraction report file, preserving everything already in it. Use this exact heading.
+Append the following to the END of the extraction report file, preserving everything already in it. Emit the marker line first, then the heading, exactly as shown.
 
+<!-- c2d:s7 -->
 ### Limitations & Improvements
 
 For each issue, classify as one of:
@@ -315,9 +346,9 @@ Pass the receipt list inline (they are small) and the report **paths**. Never pa
 
 **Synthesis steps:**
 
-1. **Verify report completeness** — for each module, confirm the report file exists and contains all seven `###` headings. Grep for the headings; do not read the files in full. Flag any missing section before proceeding.
+1. **Verify report completeness** — for each module, confirm the report file exists and contains each of the seven `<!-- c2d:sN -->` markers **exactly once**. Grep for the markers, not the headings: report prose legitimately quotes heading names, so counting headings gives false passes. Do not read the files in full. Flag any missing or duplicated marker before proceeding.
 2. **Build the cross-module dependency graph** — from the `deps` field of each receipt. Identify cycles or bidirectional dependencies. No report reads are needed for this step.
-3. **Identify system-wide patterns** — patterns that appear in 3+ modules are architectural conventions worth documenting at the top level. Grep the `### Internal Patterns` section of the reports rather than reading them whole.
+3. **Identify system-wide patterns** — patterns that appear in 3+ modules are architectural conventions worth documenting at the top level. Read the `c2d:s3` section of each report rather than the whole file.
 4. **Resolve naming consistency** — standardize module names if agents used different labels for the same module. Whatever names are settled on here become the wikilink identities for the whole vault and are recorded in `module_index`.
 5. **Determine architecture type** — classify the system as one of: monolith, microservices, modular monolith, plugin-based, or hybrid. Justify the classification.
 6. **Generate the top-level architecture narrative** — a 3–5 paragraph description of the system that a new engineer could read to understand how the pieces fit together.
@@ -423,6 +454,8 @@ The following paths and file types are NEVER analyzed during Phase 1. Do not Glo
 - `.turbo/`
 - `coverage/`
 - `.nyc_output/`
+- `_state/` — analysis internals of any vault
+- **Any directory that is itself a generated code-to-docs vault.** Detect it by the presence of `_state/analysis.json`, or by a directory of `.md` files whose frontmatter carries `generated-by: code-to-docs`. The default output path `docs-vault/` is the common case, but the vault may be anywhere, including nested under `examples/`. This matters more than it looks: running the skill on a repo that already has a vault will otherwise glob that vault's generated Markdown as source and invent "modules" out of your own output. It bit this project's own repo on the first live run, which contains both `docs-vault/` and `examples/*/docs-vault/`.
 
 **File types:**
 
@@ -689,9 +722,9 @@ Guard the whole run, not just the write:
 | `source-commit` matches the module's stored `source_commit` | Healthy | Carry forward |
 | `source-commit` disagrees | A previous run was interrupted between Step 5 and Step 8 | Mark **affected**, re-analyze |
 | The file is **missing**, empty, or has no frontmatter | A crashed write, a manual deletion, or a partial checkout | Mark **affected**, re-analyze |
-| The file lacks one of the seven `###` headings | An interrupted Pass 2, or a Pass 1 that never got its §7 | Mark **affected**, re-analyze |
+| A `<!-- c2d:sN -->` marker is missing or appears more than once | An interrupted Pass 2, a Pass 1 that never got its §7, or a report whose prose collided with the format | Mark **affected**, re-analyze |
 
-All four checks are frontmatter and heading greps — one line per module, no section bodies. Carrying forward a report that is absent or inconsistent is worse than re-analyzing it: nothing downstream would detect the dead path, and the vault would keep claiming an analysis it does not have.
+All four checks are frontmatter and marker greps — one line per module, no section bodies. Carrying forward a report that is absent or inconsistent is worse than re-analyzing it: nothing downstream would detect the dead path, and the vault would keep claiming an analysis it does not have.
 
 ---
 

@@ -136,7 +136,7 @@ Re-run the update immediately, with no further changes:
 - [ ] It is re-checked **before Step 5 writes any report**, not only at Step 8
 - [ ] Simulate a race: after the update starts but before it writes reports, modify `_state/analysis.json`'s `timestamp` externally. The run must abort **before** any `_state/modules/*.md` is written — check their mtimes are unchanged
 - [ ] Simulate a torn run: hand-edit one module's report `source-commit` to disagree with state, then run update. That module is treated as **affected** and re-analyzed rather than carried forward
-- [ ] Simulate a damaged carry-forward three ways — **delete** an unchanged module's report, **truncate** one so it loses its `### Limitations & Improvements` heading, and **blank** one's frontmatter. Each must be detected and re-analyzed, not silently carried forward
+- [ ] Simulate a damaged carry-forward three ways — **delete** an unchanged module's report, **truncate** one so it loses its `<!-- c2d:s7 -->` marker, and **blank** one's frontmatter. Each must be detected and re-analyzed, not silently carried forward
 
 ### Checkpoint A.11 — Deleted Module Cleanup
 
@@ -196,10 +196,10 @@ This is what makes migration cheaper than regeneration, so it is the checkpoint 
 
 ### Checkpoint B.3 — Migration Output Is Valid v2
 
-- [ ] `_state/modules/<slug>.md` now exists for **every** module, each with all seven `###` sections — including `### Limitations & Improvements`, appended by the second Haiku agent from the v1 `issues` array
+- [ ] `_state/modules/<slug>.md` now exists for **every** module, each with all seven `<!-- c2d:sN -->` markers exactly once — including `s7`, appended by the second Haiku agent from the v1 `issues` array
 - [ ] `architecture_type` and `system_patterns` are populated in state (or `system_patterns` is empty, which must force a System Overview regeneration on the next run)
 - [ ] The user was told that migrated modules' Health detail is limited until they are next re-analyzed
-- [ ] `_state/synthesis.md` exists with all five `##` sections
+- [ ] `_state/synthesis.md` exists with all five `<!-- c2d:yN -->` markers
 - [ ] `schema_version` is `2` and `module_index` has one entry per module with an existing `report` path
 - [ ] Every `files_analyzed` value is now a slug present in `module_index` — no `"analyzed"` placeholders remain
 - [ ] Module **names are unchanged** from the v1 state — the migration derived roots without redrawing boundaries

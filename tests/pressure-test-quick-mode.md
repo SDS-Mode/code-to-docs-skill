@@ -136,7 +136,8 @@ For each module agent, verify:
   - [ ] Internal Patterns section lists design patterns observed
   - [ ] Complexity assessment provided
   - [ ] Public API section lists exports/entry points
-  - [ ] Report frontmatter has `module`, `slug`, `roots`, `language`, `complexity`, `loc`, `analyzed-at`, `source-commit`
+  - [ ] Report frontmatter has `module`, `slug`, `purpose`, `roots`, `language`, `complexity`, `loc`, `files`, `analyzed-at`, `source-commit`
+  - [ ] Each of the seven `<!-- c2d:sN -->` markers appears **exactly once** — count markers, not `###` headings, since report prose may legitimately quote heading names
 
 - [ ] **Module 2:** (repeat above)
 - [ ] **Module 3:** (repeat above)
@@ -148,7 +149,8 @@ This is the cost invariant — check the transcript, not just the output files.
 
 - [ ] Each Pass 1 agent **returns a receipt**, not a report: the return value is a small JSON object (report path, root, entry points, language, complexity, loc, files, deps, `escalate`), not seven sections of prose
 - [ ] Each Pass 2 prompt contains a **path** to `_state/modules/{slug}.md` — no prompt contains a pasted extraction report
-- [ ] Pass 2 model tier matches its module's receipt `escalate` flag (true → Opus, false → Sonnet)
+- [ ] Pass 2 model tier matches `escalate OR loc > 1000 OR complexity == "high"` — **recomputed** from the receipt, not the raw `escalate` flag. A receipt reporting `loc: 1682` with `escalate: false` must still get Opus
+- [ ] Every `deps` entry is an exact module name from the project module list — no file paths, no directory names, no external commands like `git` or `sed`
 - [ ] The orchestrator does **not** read back a `_state/modules/*.md` file it just had an agent write
 - [ ] Pass 2 appends `### Limitations & Improvements` to the existing report file — sections 1–6 are still present and unmodified afterward
 - [ ] No Phase 2 agent prompt contains a pasted 7-section report or the full synthesis text
@@ -158,7 +160,7 @@ This is the cost invariant — check the transcript, not just the output files.
 - [ ] Dependency graph correctly reflects inter-module calls, built from receipt `deps` fields
 - [ ] No cycles detected (or cycles are documented with warning)
 - [ ] Synthesis produces a single coherent architecture narrative
-- [ ] `_state/synthesis.md` is written with all five `##` sections: Architecture Narrative, Architecture Type, System-Wide Patterns, Cross-Cutting Themes, Issue Themes
+- [ ] `_state/synthesis.md` is written with all five `<!-- c2d:yN -->` markers exactly once: Architecture Narrative, Architecture Type, System-Wide Patterns, Cross-Cutting Themes, Issue Themes
 - [ ] `synthesis.md` does **not** duplicate per-module one-liners — every module's `purpose` lives in `module_index`
 - [ ] `_state/analysis.json` is written to vault root
 

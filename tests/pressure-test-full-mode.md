@@ -170,8 +170,8 @@ Everything from the quick mode test, **plus** the following Phase 2 full-mode-sp
 - [ ] 3+ modules identified and independent dispatch used if applicable
 - [ ] `_state/analysis.json` written with complete schema, including `schema_version: 2` and a `module_index` entry per module
 - [ ] Every `files_analyzed` value is a module slug (not a hash, not `"analyzed"`)
-- [ ] `_state/modules/{slug}.md` exists per module, each with all seven `###` sections
-- [ ] `_state/synthesis.md` exists with all five `##` sections; per-module one-liners are in `module_index`, not duplicated here
+- [ ] `_state/modules/{slug}.md` exists per module, each with all seven `<!-- c2d:sN -->` markers exactly once
+- [ ] `_state/synthesis.md` exists with all five `<!-- c2d:yN -->` markers; per-module one-liners are in `module_index`, not duplicated here
 - [ ] All module dependencies correctly mapped
 
 ### Reference-Passing Discipline

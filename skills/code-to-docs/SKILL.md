@@ -54,7 +54,7 @@ This skill uses three model tiers to balance cost and quality. Select tier based
 Two conventions make this work, and they apply to every phase:
 
 - **Agents write artifacts and return receipts.** An agent that produces a document writes it to its destination and returns a short structured summary — never the document itself, which would land in the orchestrator's context whether needed there or not.
-- **Phase 1 leaves durable artifacts to point at:** `_state/modules/<slug>.md` (one seven-section report per module) and `_state/synthesis.md` (cross-module facts in five fixed sections). Phase 2 agents read these by path.
+- **Phase 1 leaves durable artifacts to point at:** `_state/modules/<slug>.md` (one seven-section report per module) and `_state/synthesis.md` (cross-module facts in five fixed sections). Phase 2 agents read these by path, addressing sections by their `<!-- c2d:sN -->` / `<!-- c2d:yN -->` markers — never by heading text, since report prose quotes heading names.
 
 See `../code-to-docs-references/output-structure.md` "The Reference-Passing Rule" for the reference table and "Analysis Artifacts" for the file formats.
 
@@ -119,7 +119,11 @@ Dispatch in parallel where possible:
 14. **A Pass 1 agent returning its full report** instead of writing `_state/modules/<slug>.md` and returning a receipt
 15. **Handing an agent "the full synthesis"** — synthesis lives in `_state/synthesis.md`; pass the path and the sections needed
 16. Re-deriving a Pass 2 tier by reading the report's prose instead of reading the receipt's `escalate` flag
-17. Reading back a file an agent just wrote in order to verify it — completeness is checked by grepping for required headings and by the Phase 3 verification agent
+17. Reading back a file an agent just wrote in order to verify it — completeness is checked by counting `<!-- c2d:sN -->` markers and by the Phase 3 verification agent
+18. **Addressing an artifact section by its heading text** instead of its `<!-- c2d:sN -->` marker — report prose quotes heading names, so heading counts give false passes
+19. **Taking a Pass 1 receipt's `escalate` at face value** — recompute `escalate OR loc > 1000 OR complexity == "high"`; extraction runs at the cheapest tier and should not be the sole arbiter of arithmetic
+20. **Accepting `deps` entries that are not exact module names** — file paths, directory names, or external commands there become phantom nodes in the dependency graph and broken wikilinks in the Canvas
+21. **Analyzing a directory that is itself a generated vault** — check for `_state/analysis.json` or `generated-by: code-to-docs` frontmatter and exclude it, or the skill will document its own output as source
 
 ---
 
@@ -142,4 +146,6 @@ Dispatch in parallel where possible:
 | "I need to see all the module reports to synthesize" | You have the receipts — names, roots, complexity, deps. Read a report only where the cross-module narrative depends on that module's internals. |
 | "I'll have the agent return the report so I can check it before passing it on" | That return lands in your context at Opus, then again in the next prompt. Trust the receipt; Phase 3 verifies. |
 | "The report is short, pasting it is harmless" | Multiply by every module and every Phase 2 agent that needs it. The rule is what keeps that multiplication from happening. |
-| "I'll re-read the module's Complexity section to decide whether Pass 2 needs Opus" | The Pass 1 receipt already carries `escalate` and `escalate_reason`, set by the agent that actually read the code. |
+| "I'll re-read the module's Complexity section to decide whether Pass 2 needs Opus" | The receipt carries `escalate`, `loc` and `complexity` — recompute from those three. Never read the prose, and never trust `escalate` alone. |
+| "The report has all seven headings, so it's complete" | Count markers. A module documenting this schema quotes the heading names, which on the first live run produced twelve headings and a §7 that existed before Pass 2 ran. |
+| "This repo already has a docs vault, that saves me some work" | It is your own output. Analyzing it invents modules out of generated Markdown. Exclude any directory containing `_state/analysis.json`. |
