@@ -25,7 +25,7 @@ Skill(skill: "code-to-docs:code-to-docs", args: "<path> [--mode quick|full] [--o
 - `--mode` — `quick` (default) or `full`
 - `--output` — vault output path (default: `./docs-vault/` relative to codebase)
 
-**Quick mode:** Architecture overview, module inventory, API reference, codebase health assessment, index pages — all at three audience levels.
+**Quick mode:** Architecture overview, module inventory, API reference, codebase health assessment, index pages — all at three audience levels. (Both modes produce all three levels; `full` adds whole directories, not depth per module. See `../code-to-docs-references/obsidian-templates.md` §2.)
 
 **Full mode:** Everything in quick, plus design patterns, onboarding guides, cross-cutting concerns, tutorial walkthroughs.
 
@@ -43,7 +43,7 @@ This skill uses three model tiers to balance cost and quality. Select tier based
 
 **Conditional escalation:** Use Opus for cross-module synthesis only when the codebase has 5+ modules or the dependency graph contains cycles or bidirectional dependencies. For simpler codebases (1-4 modules, tree-shaped dependencies), Sonnet handles synthesis adequately.
 
-**Conditional escalation for issues:** Use Opus for Limitations & Improvements analysis when a module's complexity is rated High, or when the module exceeds 1000 LOC, or when it involves concurrency or shared mutable state. Use Sonnet for Low/Medium complexity modules. The Pass 1 extraction agent evaluates these conditions and reports them as an `escalate` flag in its receipt — read the flag rather than re-deriving the judgment.
+**Conditional escalation for issues:** Use Opus for Limitations & Improvements analysis when a module's complexity is rated High, or when the module exceeds 1000 LOC, or when it involves concurrency or shared mutable state. Use Sonnet for Low/Medium complexity modules. The Pass 1 extraction agent reports these as an `escalate` flag in its receipt, but **do not take that flag at face value**: recompute `escalate OR loc > 1000 OR complexity == "high"` from the receipt's own fields. The two objective conditions are already in the receipt, and on the first live run a Haiku agent returned `loc: 1682` with `escalate: false` — only the subjective concurrency/security judgment needs trusting.
 
 ---
 
@@ -69,8 +69,8 @@ Read `../code-to-docs-references/analysis-guide.md` for detailed instructions.
 1. Survey the codebase — entry points, config files, directory structure
 2. Identify independent modules, recording each one's name, slug, and root paths — these become durable wikilink and lookup identities in `module_index`. Roots are a **list** and may be shared between modules; file-level ownership in `files_analyzed` is what distinguishes them
 3. Dispatch parallel analysis agents (MUST parallelize if 3+ modules):
-   - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files), **write them to `_state/modules/<slug>.md`**, and return a receipt (report path, roots, complexity, LOC, deps, file list, `escalate` flag)
-   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements). Each is given the **path** to its module's report, reads it itself, **appends** section 7 to that same file, and returns structured issue records. Tier comes from the Pass 1 receipt's `escalate` flag — Opus when true, Sonnet when false.
+   - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files), **write them to `_state/modules/<slug>.md`**, and return a receipt (report path, purpose, roots, complexity, LOC, `file_count`, deps, `escalate` flag — **not** the file list, which goes in the report's `files:` frontmatter)
+   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements). Each is given the **path** to its module's report, reads it itself, **appends** section 7 to that same file, and returns structured issue records. Tier comes from `escalate_final` = `escalate OR loc > 1000 OR complexity == "high"`, recomputed from the receipt — never the raw flag alone.
 4. Synthesize from the receipts (not the reports) into a dependency graph and architecture narrative — **Sonnet agent** for ≤4 tree-shaped modules, **Opus agent** for 5+ modules or complex dependency graphs — and write `_state/synthesis.md` plus a receipt carrying `architecture_type` and `system_patterns`
 5. Write `_state/analysis.json` from the receipts (Haiku agent — mechanical data transform)
 
@@ -118,7 +118,7 @@ Dispatch in parallel where possible:
 13. **Pasting into an agent prompt any payload the agent could read from disk** — pass the path and name the section instead
 14. **A Pass 1 agent returning its full report** instead of writing `_state/modules/<slug>.md` and returning a receipt
 15. **Handing an agent "the full synthesis"** — synthesis lives in `_state/synthesis.md`; pass the path and the sections needed
-16. Re-deriving a Pass 2 tier by reading the report's prose instead of reading the receipt's `escalate` flag
+16. Re-deriving a Pass 2 tier by reading the report's prose instead of recomputing `escalate_final` from the receipt's fields
 17. Reading back a file an agent just wrote in order to verify it — completeness is checked by counting `<!-- c2d:sN -->` markers and by the Phase 3 verification agent
 18. **Addressing an artifact section by its heading text** instead of its `<!-- c2d:sN -->` marker — report prose quotes heading names, so heading counts give false passes
 19. **Taking a Pass 1 receipt's `escalate` at face value** — recompute `escalate OR loc > 1000 OR complexity == "high"`; extraction runs at the cheapest tier and should not be the sole arbiter of arithmetic

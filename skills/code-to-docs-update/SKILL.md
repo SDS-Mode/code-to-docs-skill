@@ -39,7 +39,7 @@ A vault written before the analysis artifacts existed (no `schema_version` / `mo
 
 Same tiers as `code-to-docs:code-to-docs` — see that skill for the full table. Key rule: use the cheapest model that meets the task's cognitive demand. Haiku for extraction/mechanical, Sonnet for writing, Opus only for complex modules or large-codebase synthesis.
 
-Pass 2 tier selection reads the `escalate` flag from the module's fresh Pass 1 receipt — do not re-derive it from the report's prose.
+Pass 2 tier is `escalate_final` = `escalate OR loc > 1000 OR complexity == "high"`, recomputed from the module's fresh Pass 1 receipt. Do not take the raw `escalate` flag at face value, and do not re-derive the tier from the report's prose.
 
 ---
 
@@ -57,11 +57,11 @@ In update mode this has one specific consequence worth stating plainly: **carryi
 
 The flow, in order:
 
-1. **Load & validate state** — read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run. If `schema_version` or `module_index` is absent, run the one-time v1 → v2 migration (Haiku-only backfill) and continue — do **not** fall back to full generate. Record the loaded `git_commit`/`timestamp` as this run's concurrency claim. Read only the state file here.
+1. **Claim, load & validate state** — take the concurrency claim first by **exclusive-create** of `_state/.lock` (if it already exists, another update is in flight: report and abort). Then read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run. If `schema_version` or `module_index` is absent, run the one-time v1 → v2 migration (Haiku-only backfill) and continue — do **not** fall back to full generate. Record the loaded `git_commit`/`timestamp` as the claim token. Read only the state file here. **Release the lock on every exit path**, including the step-2 no-changes exit.
 2. **Check the stored commit, then diff** — if `git_commit` is null or unreachable (rebased/squashed/gc'd/shallow), fall back to full generate. Otherwise run `git diff <stored_commit>..HEAD --name-only`, and also capture the **content diff** of changed files inside known module roots, scoped by `module_index[*].roots` (step 4 needs it). Empty diff → report "no changes" and exit.
 3. **Map changed files to modules** — a lookup, not a survey: exact `files_analyzed[path]` hit, else a *unique* root prefix match, else an *ambiguous* match where modules share a root, else outside every module. See `output-structure.md` "Resolving a Changed File to Its Module". Also mark as affected any module whose carried-forward report is damaged — mismatched `source-commit`, missing file, or a missing/duplicated `<!-- c2d:sN -->` marker. Build the affected-module list; everything else is carried forward.
 4. **Auto-select quick/full** — decide *now*, from the changed-file list, `files_analyzed`, `module_index`, and the step-2 content diff (used to detect new cross-module imports). New/deleted module, changed dependency structure, or >50% churn → full; otherwise quick. When unsure, prefer full.
-5. **Re-analyze affected modules** — re-check the concurrency claim *before writing anything*, then run the same two-pass analysis as baseline against each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. Unchanged modules are left alone entirely.
+5. **Re-analyze affected modules** — re-check the claim (lock still yours, state unchanged) *before writing anything*, then run the same two-pass analysis as baseline against each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. In full mode, also run Module Identification scoped to the **case-4** paths to pick up genuinely new modules. Unchanged modules are left alone entirely.
 6. **Merge synthesis** — rebuild the dependency graph from fresh receipts plus the stored graph, rewrite `_state/synthesis.md`, and merge issues (see Issue Tracking below).
 7. **Selective generation** — regenerate affected module docs always, plus the docs of any module in the **relink** set (analysis unchanged, but it referenced something removed); gate each cross-module output on signals covering **every input in its dispatch-table row** (graph, purposes, patterns, issues, module set), and report what was skipped. Clean up every artifact of a deleted module. Pass inputs by reference per the Phase 2 dispatch table.
 8. **Update state (with a concurrency guard)** — re-read the state file and abort if its `git_commit`/`timestamp` changed since step 1 (a concurrent update); otherwise write the new state and append a session entry. Re-analyzed modules get fresh `module_index` entries; carried-forward modules keep their **original** `analyzed_at` / `source_commit`.
@@ -88,7 +88,7 @@ The one invariant worth stating twice, because it is the difference between usef
 5. Skipping state-file validation, or writing without the concurrency guard — checked **twice**, before Step 5 and at Step 8
 6. Deleting unchanged module docs — preserve them; regenerate only affected modules and the relink set
 7. **Re-surveying the codebase to re-derive module roots** — `module_index` is authoritative; a re-survey can rename a module and break every wikilink pointing at it
-8. **Reading an unchanged module's `_state/modules/<slug>.md` or `Modules/{Name}.md`** — carrying forward means leaving the file alone, not loading it
+8. **The orchestrator reading an unchanged module's `_state/modules/<slug>.md` or `Modules/{Name}.md`** — carrying forward means leaving the file alone, not loading it. (A relink-set doc *is* regenerated, but the dispatched agent reads that report by path; the orchestrator still never does — see #14.)
 9. **Advancing a carried-forward module's `analyzed_at` / `source_commit`** — that falsely claims it was analyzed at this commit and destroys staleness tracking
 10. Falling back to a full generate run on a v1 state file instead of migrating it
 11. **Reading the previous `_state/synthesis.md`** — every input needed to rewrite it is in `module_index` and the receipts
