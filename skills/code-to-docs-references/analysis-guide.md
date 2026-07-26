@@ -82,8 +82,10 @@ Every `Agent()` call in Phase 1 MUST set `model:` to match this table.
 | Agent | Model | Input (by reference) | Output (writes) | Returns | Condition |
 |-------|-------|----------------------|-----------------|---------|-----------|
 | Extraction (×N) | **haiku** | module details + entry points | `_state/modules/<slug>.md` §§1-6 | extraction receipt | always, parallel if 3+ modules |
-| Issue Analysis (×N) | **sonnet** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: false` |
-| Issue Analysis (×N) | **opus** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: true` |
+| Issue Analysis (×N) | **sonnet** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | `escalate_final` false |
+| Issue Analysis (×N) | **opus** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | `escalate_final` true |
+
+`escalate_final` is **not** the receipt's raw `escalate` flag — it is `escalate OR loc > 1000 OR complexity == "high"`, recomputed by the orchestrator. See "Model selection for Pass 2" below for why.
 | Synthesis | **sonnet** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | ≤4 modules, tree-shaped deps |
 | Synthesis | **opus** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | 5+ modules or cyclic deps |
 | State file write | **haiku** | receipts (inline) + report paths for `files:` | `_state/analysis.json` | confirmation | always |
@@ -377,6 +379,7 @@ These are stored in `analysis.json` so a later update can detect that the system
   "module_index": {
     "Module Name": {
       "slug": "module-name",
+      "purpose": "one sentence — what this module is for",
       "roots": ["relative/path/"],
       "entry_points": ["relative/path/index.ts"],
       "language": "typescript",
@@ -391,6 +394,8 @@ These are stored in `analysis.json` so a later update can detect that the system
   "dependency_graph": {
     "Module Name": ["Dependency Module A", "Dependency Module B"]
   },
+  "architecture_type": "modular monolith",
+  "system_patterns": ["Repository", "Event Bus"],
   "files_analyzed": {
     "relative/path/to/file.ts": "module-slug"
   },
@@ -411,6 +416,8 @@ Field-by-field, this is a direct transform of receipt data — no judgment, whic
 | `dependency_graph` | Pass 1 receipt `deps` |
 | `issues` | Pass 2 issue records, each with the module name added and `status: "open"` |
 | `architecture_type`, `system_patterns` | The synthesis receipt |
+
+None of `purpose`, `architecture_type` or `system_patterns` is optional: they are what the `purposes_changed` and `patterns_changed` gates compare, what supplies wikilink context to module-doc writers, and what digest reads for its module inventory. A state file missing them leaves the next update unable to tell whether `Architecture/System Overview.md` needs regenerating, so it goes stale silently.
 
 Cross-check each report's `file_count` receipt field against the number of `files:` entries it actually read, and report any mismatch rather than silently writing a partial `files_analyzed` — an incomplete ownership map degrades the next update into re-surveying.
 
@@ -438,7 +445,9 @@ All seven sections are required per module, and all seven live in **one file** a
 
 ## Exclusions
 
-The following paths and file types are NEVER analyzed during Phase 1. Do not Glob into them, do not Read them, do not pass them to agents.
+The following paths and file types are NEVER analyzed during Phase 1. Do not Glob into them, do not Read them as source, do not pass them to agents **as material to analyse**.
+
+This is a rule about what counts as *source*. It does not restrict the pipeline's own artifacts: `_state/modules/<slug>.md` paths are passed to Pass 2 agents by design, the state writer reads report frontmatter, and the update flow loads `_state/analysis.json`. Those are the skill's working files, not the analysed codebase.
 
 **Directories:**
 
@@ -454,7 +463,6 @@ The following paths and file types are NEVER analyzed during Phase 1. Do not Glo
 - `.turbo/`
 - `coverage/`
 - `.nyc_output/`
-- `_state/` — analysis internals of any vault
 - **Any directory that is itself a generated code-to-docs vault.** Detect it by the presence of `_state/analysis.json`, or by a directory of `.md` files whose frontmatter carries `generated-by: code-to-docs`. The default output path `docs-vault/` is the common case, but the vault may be anywhere, including nested under `examples/`. This matters more than it looks: running the skill on a repo that already has a vault will otherwise glob that vault's generated Markdown as source and invent "modules" out of your own output. It bit this project's own repo on the first live run, which contains both `docs-vault/` and `examples/*/docs-vault/`.
 
 **File types:**
@@ -557,7 +565,7 @@ Decide **before** re-analysis, using only signals available now: the changed-fil
 | Condition | How to detect it now | Mode |
 |-----------|----------------------|------|
 | All changes within existing modules, no new/deleted modules | every changed path resolves via Step 3 rule 1 or 2 | **Quick** |
-| New module detected | a changed/added path hits Step 3 rule 3 — outside every `module_index` root | **Full** |
+| New module detected | a changed/added path hits Step 3 **case 4** — no root prefixes it | **Full** |
 | Module deleted | every file of a module is gone from disk | **Full** |
 | Dependency structure changed | the Step 2.3 content diff has **added** (`+`) import/require lines in one module's files that resolve into a different module's `module_index` root | **Full** |
 | >50% of tracked files changed | `|changed ∩ files_analyzed keys| / |files_analyzed| > 0.5`, computed globally | **Full** |
@@ -575,7 +583,9 @@ For each affected module, run the same two-pass analysis as baseline, writing to
 
 For **unchanged modules**, carrying forward is a no-op: their report files already sit at known paths with correct frontmatter, and their `module_index` entries are reused verbatim. Do not read them, do not re-summarize them, and do not re-analyze them.
 
-If auto-selected mode is **full**, also run Step 2 (Module Identification) — but scoped to the paths that hit Step 3 rule 3, not the whole codebase — to identify any new modules, then analyze those as well. Existing module boundaries stay as `module_index` defines them.
+If auto-selected mode is **full**, also run Step 2 (Module Identification) — scoped to the paths that hit Step 3 **case 4** (outside every known root), not the whole codebase — to identify any new modules, then analyze those as well. Existing module boundaries stay as `module_index` defines them.
+
+**Case 4 is the one that yields new modules; case 3 does not.** Case 3 paths lie inside a directory that existing modules already share, so they are handled by re-analysing those modules. Scoping identification to case 3 instead of case 4 means a genuinely new top-level directory triggers full mode and is then excluded from the very step meant to identify it — the new module is never found, on that run or any later one, because the next update sees no new change.
 
 ### Update Step 6: Merge Synthesis
 
@@ -612,11 +622,13 @@ Use the same Phase 2 generation flow and the same dispatch table in `output-stru
 |--------|-----------|
 | `modules_changed` | A module was added or removed |
 | `graph_changed` | The rebuilt `dependency_graph` differs from the stored one, or `modules_changed` |
-| `purposes_changed` | Any module's `purpose` in `module_index` differs from the stored one |
+| `purposes_changed` | A module was added or removed, **or** a re-analysed module's `purpose` differs from the stored one in substance — not merely in wording |
 | `patterns_changed` | The synthesized `system_patterns` list differs from the stored one, or the synthesized `architecture_type` differs from the stored one |
 | `issues_changed` | The merged `issues` array differs from the stored one in any element (added, removed, changed `status`/`severity`), **or** any re-analyzed module has at least one issue — because Pass 2 rewrites its §7 prose, which the Health writers read |
 
 `system_patterns` and `architecture_type` are stored in `analysis.json` for exactly this reason: without them, detecting a pattern change would require reading the previous `_state/synthesis.md`, which the update flow forbids.
+
+**Compare `purpose` and `system_patterns` by meaning, not by bytes.** Both are LLM-generated prose, so a re-analysed module will almost always produce a differently-worded sentence describing the same thing. A byte comparison is therefore true on nearly every update, which silently defeats the gate and returns you to regenerating everything — the same non-determinism trap that the Step 6 issue-merge rule guards against when it refuses to mark an issue `resolved` just because a re-analysis didn't mention it. Treat a reworded purpose or a renamed-but-equivalent pattern as **unchanged**; require a real difference — a module now described as doing something else, a pattern added or dropped from the list. When genuinely unsure, treat it as changed and regenerate.
 
 | Output | When to regenerate | Inputs the gate must cover |
 |--------|-------------------|----------------------------|
@@ -711,9 +723,14 @@ Once analysis reports became durable files, the state file stopped being the onl
 
 Guard the whole run, not just the write:
 
-1. **Claim (Step 1).** After loading and validating state, record the `git_commit` and `timestamp` you loaded. These are the run's claim token.
-2. **Re-check before writing anything (before Step 5).** Re-read `_state/analysis.json`. If `git_commit` or `timestamp` differs from the claim, another run got there first — abort **before** dispatching any analysis agent, so no report is written and nothing is corrupted. This is the cheap place to lose a race.
+1. **Claim (Step 1), by writing.** Create `_state/.lock` containing this run's start timestamp and the `git_commit` it loaded. Create it with an **exclusive create** that fails if the file already exists (`set -C; > _state/.lock` in shell, or `open(..., 'x')`) — the failure *is* the signal. If it already exists, another run is in flight: report its contents and abort before doing anything. Record the loaded `git_commit`/`timestamp` as the claim token too.
+2. **Re-check before writing anything (before Step 5).** Confirm `_state/.lock` still contains your own claim, and re-read `_state/analysis.json` to confirm `git_commit` and `timestamp` still match the token. Either mismatch means another run interfered — abort **before** dispatching any analysis agent, so no report is written and nothing is corrupted. This is the cheap place to lose a race.
 3. **Re-check before writing state (Step 8).** As described above.
+4. **Release the lock** on success *and* on every abort path, including the Step 2 empty-diff exit. A lock left behind blocks all future updates, so treat removal as mandatory cleanup rather than a final step that might be skipped.
+
+**A read-only claim cannot detect an in-flight run — only a finished one.** If the claim were merely the values read at Step 1, two runs starting within the same window would both read identical values, both pass the pre-Step-5 check, and both write reports; the loser would then abort at Step 8 having already overwritten the winner's artifacts. That is precisely the corruption this section exists to prevent, so the claim must leave a mark other runs can see.
+
+**If a stale lock blocks a legitimate run** — a previous run was killed — the recovery is to confirm no update is running, delete `_state/.lock`, and re-run. The torn-report detection below will repair whatever the killed run left half-written.
 
 **Detecting a torn or damaged carry-forward.** A report's `source-commit` frontmatter is the repair signal. During Step 3, for every module the state says is unchanged, check its report at `module_index[name].report`:
 
