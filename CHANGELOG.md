@@ -2,6 +2,19 @@
 
 All notable changes to the code-to-docs skill are documented in this file.
 
+## 2026-07-26
+
+Hook-script fixes found by running the documentation pipeline over this repository's own source. All three were reproduced against scratch fixtures rather than inferred from reading.
+
+### Fixed
+
+- **Code injection in the SessionStart hook** — `digest-on-start.sh` spliced the vault path into a `python3 -c` string literal, so a quote in the path terminated the literal and the remainder was evaluated as Python. Demonstrated end to end: a vault directory named as a payload both executed a side effect and redirected `open()` to a different file than the one the existence guard had checked. The path is now passed as `argv`, matching the discipline `setup.sh` already used.
+- **A hook that misinformed the model it exists to inform** — the same extractor ended in `2>/dev/null || echo "unknown ... 0"`, so *every* failure (a quote in the path, corrupt JSON, schema drift, a missing `python3`) collapsed into a banner of `unknown` values asserting **`Open issues: 0`**. Since that text is injected straight into Claude's context, a vault with open issues was reported as having none. Failures now say so on stdout and print the diagnostic on stderr, and the count is never printed unless it was computed.
+- **Setup and teardown deleted co-located user hooks** — both filtered `.claude/settings.json` at the handler-group level, discarding an entire group when any hook inside it carried `source: "code-to-docs"`. A hook the user had added alongside ours vanished on the next `setup.sh` or `teardown.sh` run, with no backup, contradicting the skill's "other hooks are left untouched" promise while `setup.sh` invited the user to hand-edit the file. Both now filter individual hook objects and drop a group only once it is empty.
+- **Teardown deleted a settings file it never modified** — the empty-file check ran unconditionally, so a pre-existing `.claude/settings.json` containing only `{}` was unlinked while teardown reported removing zero hooks. Deletion is now conditional on having actually removed something, and the counter counts hooks rather than handler groups.
+- **The staleness banner always looked stale** — the stored commit was truncated to 8 characters while the live one came from `git rev-parse --short` (7 in a small repo), so the two never rendered identically even when the vault was current. Both are now 8.
+- **`teardown.sh` built its Python program by shell interpolation** — not exploitable, since the settings path is a constant, but the same construction as the injection above and the opposite convention from `setup.sh`. Converted to `argv`; also dropped the trailing `2>&1` that merged tracebacks into normal output.
+
 ## 2026-07-22
 
 ### Changed
