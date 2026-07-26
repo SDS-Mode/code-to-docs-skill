@@ -376,12 +376,14 @@ Field-by-field, this is a direct transform of receipt data — no judgment, whic
 | State field | Source |
 |-------------|--------|
 | `module_index` entries | Pass 1 receipt `purpose` / `roots` / `entry_points` / `language` / `complexity` / `loc`, plus the settled module name from synthesis step 4 |
-| `files_analyzed` | The `files:` frontmatter of each report (read at Haiku), each path mapped to that report's `slug` |
+| `files_analyzed` | The `files:` frontmatter of each report (read at Haiku), each path mapped to that report's `slug`. **Merge, never overwrite** — a path listed by two reports gets an array of both slugs |
 | `dependency_graph` | Pass 1 receipt `deps` |
 | `issues` | Pass 2 issue records, each with the module name added and `status: "open"` |
 | `architecture_type`, `system_patterns` | The synthesis receipt |
 
 Cross-check each report's `file_count` receipt field against the number of `files:` entries it actually read, and report any mismatch rather than silently writing a partial `files_analyzed` — an incomplete ownership map degrades the next update into re-surveying.
+
+**A path claimed by two reports is expected, not an error.** Modules may share a root, so a utility can genuinely belong to two of them. Merge the owners into an array and **list every shared file in the run summary** — both because it affects change attribution (a change to a shared file re-analyses all its owners) and because a long shared list is a signal that the module boundaries were drawn too finely. Overwriting instead of merging would leave the losing module never re-analysed when a file it owns changes: silent, symptomless staleness.
 
 On a baseline generate run, populate `issues` from the Pass 2 records (each with `status: "open"`) and `sessions` with one `"generate"` entry — do not ship the arrays empty if issues were found. See `output-structure.md` for the full schema description and incremental contract details.
 
@@ -498,7 +500,7 @@ If the diff is empty (no changes since last run), report "No changes since last 
 
 This is a **lookup, not a survey.** `files_analyzed` maps every previously analyzed path to its owning module slug, and `module_index` records every module's root paths. Both come from the state file loaded in Step 1.
 
-Resolve each changed file using the four-case order in `output-structure.md` "Resolving a Changed File to Its Module": exact `files_analyzed` hit, then a *unique* root prefix match, then an *ambiguous* match where modules share a root, then no match at all.
+Resolve each changed file using the four-case order in `output-structure.md` "Resolving a Changed File to Its Module": exact `files_analyzed` hit, then a *unique* root prefix match, then an *ambiguous* match where modules share a root, then no match at all. A `files_analyzed` value may be an **array** — a shared file marks all of its owners affected.
 
 **Never re-derive module roots by re-surveying the codebase.** `module_index` is authoritative for boundaries. A re-survey may draw a boundary differently and rename a module, which silently invalidates every `[[wikilink]]` pointing at the old name and orphans its `Modules/{Name}.md`.
 
@@ -589,7 +591,8 @@ Use the same Phase 2 generation flow and the same dispatch table in `output-stru
 | `Architecture/Dependency Map.md` | If `graph_changed` | dependency graph, module list |
 | `Architecture/System Map.canvas` | If `graph_changed` | dependency graph, module list |
 | `Modules/{Name}.md` for affected modules | Always | that module's report |
-| `Modules/{Name}.md` for unchanged modules | **Never** — preserve existing | — |
+| `Modules/{Name}.md` for modules in the **relink** set | Always — from their existing reports (see "the relink set") | that module's unchanged report |
+| `Modules/{Name}.md` for all other unchanged modules | **Never** — preserve existing | — |
 | `Health/Health Summary.md` | If `issues_changed` | issue counts |
 | `Health/Limitations.md`, `Health/Code Review.md` | If `issues_changed` | issue records **and** §7 prose |
 | `Documentation.base` | If `modules_changed` **or** `purposes_changed` | `module_index` |
@@ -615,11 +618,34 @@ Report what was skipped and why: `"Regenerated 3 files; skipped System Overview,
 1. Delete `Modules/{Name}.md` and `_state/modules/<slug>.md`
 2. Remove its entry from `modules`, `module_index`, and `dependency_graph` — including edges *pointing at* it from other modules' dependency lists
 3. Drop its files from `files_analyzed`
-4. Note the removed title so Step 9 can sweep for now-broken inbound `[[wikilinks]]` from unchanged files
+4. **Regenerate the doc of every module that referenced it** — see "the relink set" below
+5. Note the removed title so Step 9 sweeps for any remaining inbound `[[wikilinks]]`
 
 Its issues were already marked `resolved` during the Step 6 merge — that belongs with the rest of the issue merging, not here.
 
 Skipping step 1 leaves an orphan report that every future update dutifully carries forward as a module that no longer exists. Note that removing a module makes `modules_changed` and `graph_changed` true, so `Documentation.base`, the Dependency Map, and the Canvas all correctly regenerate without it.
+
+#### The relink set — modules whose docs reference something removed
+
+A deleted module does not only leave its own artifacts behind. Every module that depended on it has, in its **own** doc:
+
+- a `dependencies:` frontmatter entry `"[[Deleted Module]]"`
+- `[[Deleted Module]]` wikilinks in its prose
+
+Those modules are **not affected for analysis** — their code did not change, so re-running Pass 1 and Pass 2 on them would be waste. But the "preserve unchanged module docs" rule cannot apply to them either: preserved, their links dangle permanently. Verification would report the breakage once, and on every later run scoped verification has no deletion to sweep for, so the broken links become invisible.
+
+So distinguish two kinds of affected:
+
+| Set | Meaning | Cost |
+|-----|---------|------|
+| **affected** | Code changed (or its report is damaged) → re-run Pass 1 + Pass 2, then regenerate its doc | Full two-pass |
+| **relink** | Analysis unchanged, but the doc references a module that was removed or renamed → regenerate the doc **from its existing, untouched report** | One Sonnet doc write, no analysis |
+
+Build the relink set from the `dependency_graph` edges you removed in step 2: any module that had an edge pointing at a deleted module. Add any module whose doc contains a `[[wikilink]]` to a removed title, found by the Step 9 sweep pattern. A module in both sets is simply **affected** — the fuller treatment wins.
+
+This is the one case where an unchanged module's doc is legitimately regenerated. State it in the run summary so it does not look like a violation of the preserve rule: `"Regenerated 2 docs to drop links to the removed Scheduler module (analysis unchanged, reports reused)."`
+
+The same logic applies to a **rename**, if one ever happens — which is why `module_index` treats names as durable. A rename is a delete plus an add, and every inbound link needs the same repair.
 
 ### Update Step 8: Update State File
 
@@ -677,8 +703,10 @@ On an **update**, a full-vault sweep re-reads files that provably cannot have ch
 
 | Set | Why it can break | How to collect it |
 |-----|------------------|-------------------|
-| Files written this run | New or rewritten content can contain a bad link or malformed frontmatter | The generation step already knows exactly which files it wrote |
+| Files written this run | New or rewritten content can contain a bad link or malformed frontmatter | The generation step already knows exactly which files it wrote — including the relinked docs |
 | Files linking to a **removed** title | An unchanged file's link breaks when its target is deleted or renamed | Only when a module was deleted or renamed: grep the vault for `[[<removed title>]]` |
+
+On a deletion the second sweep should come back **clean**, because Step 7 regenerated the relink set specifically to drop those links. A hit here means a dangling link survived — report it as a failure of the relink step, not just as a broken link.
 
 If no file was deleted or renamed, the second set is empty and verification covers only what was written. Report the scope in the summary — "verified 4 files written this run; no deletions, so no inbound-link sweep needed" — so a narrow check is never mistaken for a full one.
 

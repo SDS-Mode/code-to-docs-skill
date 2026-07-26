@@ -63,7 +63,7 @@ The flow, in order:
 4. **Auto-select quick/full** — decide *now*, from the changed-file list, `files_analyzed`, `module_index`, and the step-2 content diff (used to detect new cross-module imports). New/deleted module, changed dependency structure, or >50% churn → full; otherwise quick. When unsure, prefer full.
 5. **Re-analyze affected modules** — re-check the concurrency claim *before writing anything*, then run the same two-pass analysis as baseline against each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. Unchanged modules are left alone entirely.
 6. **Merge synthesis** — rebuild the dependency graph from fresh receipts plus the stored graph, rewrite `_state/synthesis.md`, and merge issues (see Issue Tracking below).
-7. **Selective generation** — regenerate affected module docs always; gate each cross-module output on signals covering **every input in its dispatch-table row** (graph, purposes, patterns, issues, module set), and report what was skipped. Clean up every artifact of a deleted module. Pass inputs by reference per the Phase 2 dispatch table.
+7. **Selective generation** — regenerate affected module docs always, plus the docs of any module in the **relink** set (analysis unchanged, but it referenced something removed); gate each cross-module output on signals covering **every input in its dispatch-table row** (graph, purposes, patterns, issues, module set), and report what was skipped. Clean up every artifact of a deleted module. Pass inputs by reference per the Phase 2 dispatch table.
 8. **Update state (with a concurrency guard)** — re-read the state file and abort if its `git_commit`/`timestamp` changed since step 1 (a concurrent update); otherwise write the new state and append a session entry. Re-analyzed modules get fresh `module_index` entries; carried-forward modules keep their **original** `analyzed_at` / `source_commit`.
 9. **Verify** — Haiku agent checks wikilinks + frontmatter across the files written this run, plus (only if something was deleted or renamed) files carrying links to the removed titles.
 
@@ -71,28 +71,22 @@ The flow, in order:
 
 ## Issue Tracking Across Updates
 
-When merging the new analysis with the previous `issues` array:
+The per-case merge rules live in `../code-to-docs-references/analysis-guide.md` "Update Step 6: Merge Synthesis" — **read them there.** They are not restated here, because a copy of that table in this file drifted from the original once already.
 
-| Scenario | Action |
-|----------|--------|
-| Issue still reported in a re-analyzed module | Keep with status `open` |
-| Issue no longer reported, **and** the diff touched its `file`/`lines` | Mark `resolved` |
-| Issue no longer reported, but the diff did **not** touch its `file`/`lines` | Keep `open` — treat the omission as Pass 2 non-determinism, not a fix |
-| Issue in a module that wasn't re-analyzed | Keep `open` (carried forward) |
-| New issue found in a re-analyzed module | Add with status `open` |
+The one invariant worth stating twice, because it is the difference between useful and actively harmful output:
 
-Marking an issue `resolved` requires positive evidence that the code it points at actually changed. Never flip an issue to `resolved` merely because a non-deterministic re-analysis didn't mention it — that silently tells users a still-present bug is fixed.
+> Marking an issue `resolved` requires **positive evidence that the code it points at actually changed** — the diff touched its `file` (and overlapped its `lines` when recorded), or the module was deleted outright. Never flip an issue to `resolved` merely because a non-deterministic re-analysis didn't mention it. That silently tells users a still-present bug is fixed.
 
 ---
 
 ## Red Flags
 
 1. Diffing against a null or unreachable stored commit instead of falling back to full generation
-2. Marking an issue `resolved` without the diff having touched its file/lines
+2. Marking an issue `resolved` without positive evidence — the diff touched its file/lines, or its module was deleted
 3. Choosing quick vs full from data that only exists after re-analysis — the mode is decided in step 4 from signals gathered in step 2
 4. Re-analyzing unchanged modules — only affected modules get re-analyzed
 5. Skipping state-file validation, or writing without the concurrency guard — checked **twice**, before Step 5 and at Step 8
-6. Deleting unchanged module docs — preserve them, only regenerate affected ones
+6. Deleting unchanged module docs — preserve them; regenerate only affected modules and the relink set
 7. **Re-surveying the codebase to re-derive module roots** — `module_index` is authoritative; a re-survey can rename a module and break every wikilink pointing at it
 8. **Reading an unchanged module's `_state/modules/<slug>.md` or `Modules/{Name}.md`** — carrying forward means leaving the file alone, not loading it
 9. **Advancing a carried-forward module's `analyzed_at` / `source_commit`** — that falsely claims it was analyzed at this commit and destroys staleness tracking
@@ -100,9 +94,11 @@ Marking an issue `resolved` requires positive evidence that the code it points a
 11. **Reading the previous `_state/synthesis.md`** — every input needed to rewrite it is in `module_index` and the receipts
 12. **Writing reports without re-checking the concurrency claim first** — losing the race after Step 5 leaves your reports beside another run's state
 13. **Leaving a deleted module's report or doc on disk** — every future update carries it forward as a module that no longer exists
-14. **Skipping a cross-module regeneration without saying so** — a silent skip is indistinguishable from a bug; report what was skipped and which signal was unchanged
-15. **Gating an output on signals that miss one of its dispatch-table inputs** — e.g. gating System Overview on the graph alone when it also consumes system-wide patterns; the output then drifts out of sync with what it projects
-16. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
+14. **Preserving the doc of a module that linked to a deleted one** — its `dependencies` frontmatter and prose wikilinks dangle permanently, and scoped verification stops looking for them after this run. Regenerate it from its existing report (the relink set)
+15. **Overwriting rather than merging a shared file's owners in `files_analyzed`** — the losing module is then never re-analysed when a file it owns changes
+16. **Skipping a cross-module regeneration without saying so** — a silent skip is indistinguishable from a bug; report what was skipped and which signal was unchanged
+17. **Gating an output on signals that miss one of its dispatch-table inputs** — e.g. gating System Overview on the graph alone when it also consumes system-wide patterns; the output then drifts out of sync with what it projects
+18. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
 
 ## Rationalization Traps
 
@@ -116,3 +112,5 @@ Marking an issue `resolved` requires positive evidence that the code it points a
 | "Regenerating the architecture docs anyway is safer than deciding whether to" | Only if something they describe moved — but the gate must cover *every* input in the output's dispatch-table row, not just the obvious ones. Say out loud what you skipped. |
 | "The graph didn't change, so the architecture narrative can't have" | System-wide patterns are an input too, and re-analysing one module can shift them. That is why `patterns_changed` exists. |
 | "The race is unlikely, one guard at the end is enough" | Reports are written three steps earlier. Losing at Step 8 then leaves your reports beside the winner's state. |
+| "Unchanged module docs are never regenerated, so I'll preserve this one too" | Not when it links to a module that was just deleted. That is the relink set, and its doc is rewritten from its existing report — no re-analysis. |
+| "This util is in two modules' roots, I'll just pick one owner" | Then the other is never re-analysed when the util changes. Record both. |

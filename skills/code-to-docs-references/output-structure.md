@@ -374,7 +374,8 @@ The five `##` headings are exact and fixed, for the same Grep-addressability rea
   "architecture_type": "modular monolith",
   "system_patterns": ["Repository", "Event Bus"],
   "files_analyzed": {
-    "relative/path/to/file.ts": "module-slug"
+    "relative/path/to/file.ts": "module-slug",
+    "relative/path/to/shared-util.ts": ["module-a", "module-b"]
   },
   "git_commit": "abc123 or null if not a git repo",
   "timestamp": "ISO 8601",
@@ -423,13 +424,15 @@ The `report` and `doc` fields are vault-relative paths, so any agent can be hand
 
 **`files_analyzed`** — maps each analyzed file to its **owning module slug**. This is file ownership, not change detection: `git diff` is the sole source of truth for what changed (see `analysis-guide.md` Token Efficiency Rules). Earlier revisions of this schema stored a content hash here; nothing read it, and it drifted to a placeholder in practice.
 
+**A file may have more than one owner**, in which case the value is an array of slugs. This follows directly from roots being shareable: when `src/lib/server/` holds several logical modules, a utility there can genuinely belong to two of them, and both Pass 1 agents will list it in their report's `files:`. Recording only one owner would mean the *other* module never gets re-analyzed when that file changes — a silent staleness bug with no symptom until its documentation is quietly wrong. The state writer must therefore **merge** owners rather than overwrite, and report every shared file it found so the module boundaries can be reviewed.
+
 ### Resolving a Changed File to Its Module
 
 `files_analyzed` is exact and unambiguous, so it is always tried first. `roots` is the fallback for files that did not exist at the last analysis, and it can be ambiguous — resolve in this order:
 
 | Order | Condition | Resolution |
 |-------|-----------|------------|
-| 1 | `files_analyzed[path]` exists | That slug. Exact, O(1), the common case |
+| 1 | `files_analyzed[path]` exists | That slug — or **every** slug, if the value is an array (a shared file affects all its owners). Exact, O(1), the common case |
 | 2 | Exactly **one** module has a root that prefixes the path | That module — a new file added to it |
 | 3 | **Several** modules share a root that prefixes the path | Ambiguous. Re-analyze every module sharing that root, and prefer **full** mode so module identification re-runs scoped to that directory — a genuinely new module may be hiding there |
 | 4 | No root prefixes the path | Outside every module — potential new module, triggers **full** mode |
@@ -460,7 +463,7 @@ Before reading `analysis.json` in update or digest mode, validate the following 
 |-------|------|----------|
 | `modules` | array of strings | yes |
 | `dependency_graph` | object (string → array of strings) | yes |
-| `files_analyzed` | object (string → string) | yes |
+| `files_analyzed` | object (string → string, or string → array of strings for a shared file) | yes |
 | `git_commit` | string or null | yes |
 | `timestamp` | string (ISO 8601) | yes |
 | `mode` | string (`"quick"` or `"full"`) | yes |

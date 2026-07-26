@@ -42,6 +42,7 @@ The single largest hidden cost in the pre-artifact design was re-deriving module
 - [ ] The transcript shows **no** read of `README.md` or the package manifest
 - [ ] The transcript shows **no** module-identification reasoning ("identifying modules…", listing top-level directories)
 - [ ] Module-to-file mapping is done by lookup against `files_analyzed` / `module_index`
+- [ ] Any `files_analyzed` value that is an **array** (a file owned by two modules sharing a root) marks **all** its owners affected when that file changes — not just the first
 - [ ] Module names in the new state are **identical** to the baseline — no renames, no re-slugging:
       `diff <(jq -S '.modules' /tmp/baseline-state.json) <(jq -S '.modules' _state/analysis.json)`
 
@@ -147,6 +148,14 @@ Delete an entire module from the codebase, commit, and run update.
 - [ ] Edges **pointing at** it are removed from other modules' `dependency_graph` lists
 - [ ] Its issues are marked `resolved` **by the Step 6 merge**, not as an afterthought in Step 7 (deletion is positive evidence the code is gone)
 - [ ] `Documentation.base` regenerated — the module set changed, so it must no longer list the deleted module
+
+**The relink set** — this is the part that is easy to get wrong, because it is the one legitimate exception to "never regenerate an unchanged module's doc":
+
+- [ ] Every module that depended on the deleted one had its `Modules/{Name}.md` **regenerated**, dropping the dangling `[[wikilink]]` from both its `dependencies:` frontmatter and its prose
+- [ ] Those modules were **not** re-analyzed — no Pass 1 or Pass 2 agent ran for them, and their `_state/modules/<slug>.md` and `analyzed_at` are untouched
+- [ ] The run summary distinguishes them from genuinely affected modules, e.g. `"Regenerated 2 docs to drop links to the removed Scheduler module (analysis unchanged, reports reused)."`
+- [ ] `grep -r '\[\[Deleted Module\]\]' <vault>` returns **nothing** — the Step 9 sweep should come back clean because Step 7 already fixed the links. A hit is a relink-step failure, not merely a broken link
+- [ ] Re-run update with no further changes: verification reports no broken links (i.e. the breakage was actually repaired, not just reported once and forgotten)
 - [ ] Verification swept for inbound `[[wikilinks]]` to the removed title, and any that existed were reported
 
 ---

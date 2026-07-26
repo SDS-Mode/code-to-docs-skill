@@ -173,6 +173,7 @@ This is the cost invariant — check the transcript, not just the output files.
 - [ ] `module_index` has one entry per name in `modules`, and no extra keys
 - [ ] Each `module_index` entry has `slug`, `roots` (non-empty array), `report`, and its `report` path exists on disk
 - [ ] Every `files_analyzed` **value** is a slug appearing in `module_index` — not a hash, not the string `"analyzed"`
+- [ ] A file listed in two reports' `files:` frontmatter appears in `files_analyzed` with **both** owners as an array, and every shared file was named in the run summary — an overwritten owner means that module is never re-analyzed when the file changes
 - [ ] Every `files_analyzed` **key** starts with one of its module's recorded `roots`
 - [ ] `dependency_graph` has entries for each module
 - [ ] `mode` field equals `"quick"`
