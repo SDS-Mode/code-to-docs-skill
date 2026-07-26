@@ -235,6 +235,8 @@ All cross-references between generated files use Obsidian wikilink syntax.
 
 **Rules:**
 - Every wikilink MUST have a corresponding generated file. Do not create speculative links to files that have not been generated yet.
+- **The link target must be byte-identical to the target's `title` frontmatter.** Copy it; do not tidy it. Rewriting `&` as `and`, straightening quotes, or swapping a hyphen for an en-dash all produce a link that silently fails to resolve.
+- **Source-code paths and filenames go in backticks, never in wikilinks.** A module report's prose names real source files, and turning `output-structure.md` into `[[output-structure]]` invents a link to a note that will never exist. Only the vault's own generated pages are wikilink targets — module docs, architecture pages, health pages, patterns, onboarding, cross-cutting, and the index.
 - When referencing a module in prose for the first time in a section, use a wikilink. Subsequent mentions in the same section may use plain text.
 - The `dependencies` and `related-notes` frontmatter fields must also use wikilink syntax: `"[[Module Name]]"`.
 

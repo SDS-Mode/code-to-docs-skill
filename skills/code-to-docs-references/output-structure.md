@@ -89,6 +89,7 @@ docs-vault/
 - One pattern = one file in `Patterns/`
 - One cross-cutting concern = one file in `Cross-Cutting/`
 - Sanitize illegal filename characters (`/`, `:`, `?`, `*`, `<`, `>`, `|`) — replace with hyphens
+- **Normalise `&` to `and` in the module *name* itself, at identification time** — so the title is `Packaging and Release`, not `Packaging & Release`. This is not a filename-legality issue; `&` is legal in a filename. It is that agents silently "tidy" an ampersand into `and` when writing a wikilink, and inconsistently: on one live run a Haiku agent wrote `[[Packaging and Release]]` in the Dependency Map and Canvas while a Sonnet agent wrote `[[Packaging & Release]]` in the System Overview, against a file actually named `Packaging & Release.md`. Every one of those links silently failed to resolve. Removing the character from the title removes the temptation. Apply the same reasoning to any character an agent might normalise — smart quotes, en-dashes, non-breaking spaces.
 
 ---
 
