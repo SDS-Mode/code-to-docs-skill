@@ -2,6 +2,29 @@
 
 All notable changes to the code-to-docs skill are documented in this file.
 
+## 2026-07-26
+
+Reference-passing refactor. `:update` was expensive for a structural reason: the orchestrator acted as a data bus, and every payload it pasted into an agent prompt was Opus *output* tokens retyping bytes that already existed on disk. Two gaps in the state file made that unavoidable — module root paths were never persisted (so every update silently re-surveyed the codebase to re-derive them), and the per-module analysis reports were never persisted (so "carry forward the existing reports" degenerated into reading every unchanged module's full prose doc into Opus context and re-serializing it into synthesis).
+
+### Added
+- **Analysis artifacts in `_state/`** — `modules/<slug>.md` holds each module's seven-section report (Pass 1 writes §1-6, Pass 2 appends §7); `synthesis.md` holds cross-module facts in six fixed sections, including `## Module Purposes` (one line per module, the wikilink context). Their headings are fixed so downstream agents grep one section instead of reading the whole file.
+- **The reference-passing rule** — agent prompts carry paths and small structured data, never the text of a file on disk; inline context is capped at roughly 500 tokens. Codified in `output-structure.md`, in the Phase 1 and Phase 2 dispatch tables' Input columns, as Token Efficiency Rules 9–11, and as Red Flags plus Rationalization Traps in the generate and update skills.
+- **`module_index` in the state file** — per module: slug, **root path**, entry points, language, complexity, LOC, report path, doc path, and per-module `analyzed_at`/`source_commit`. This makes update's change-to-module mapping an O(1) lookup and makes carry-forward auditable. It is authoritative for module boundaries: re-deriving roots can redraw a boundary, rename a module, and silently invalidate every wikilink pointing at the old name.
+- **`schema_version` and a v1 → v2 migration** — an older vault migrates in place with a Haiku-only backfill (Pass 1 for §1-6; §7 recovered from the `issues` array the v1 state already persists) instead of being forced through a full regenerate.
+- **`tests/pressure-test-update.md`** — scenarios for a v2 incremental run and a v1 migration run, asserting no re-survey and no unchanged-report reads.
+
+### Changed
+- **Pass 1 agents write their report and return a ~150-token receipt** (report path, root, entry points, complexity, LOC, file list, deps, `escalate` flag) instead of returning a ~3K-token report. Previously each report crossed the orchestrator's context twice — once returned, once retyped into the Pass 2 prompt — for three copies, two at the most expensive tier.
+- **Pass 2 agents receive a report *path*** and read it themselves; `analysis-guide.md` no longer contains a `[PASTE THE FULL HAIKU EXTRACTION REPORT HERE]` placeholder. They append §7 to the same file and return structured issue records, so the `issues` array is now a concatenation of receipts rather than re-parsed prose.
+- **Pass 2 model tier comes from the Pass 1 receipt's `escalate` flag.** The escalation conditions are unchanged (High complexity / >1000 LOC / concurrency-or-security), but they are now evaluated by the agent that actually read the code rather than by the orchestrator inspecting the report's prose.
+- **Synthesis works from receipts**, reading a report only where the cross-module narrative depends on that module's internals, and writes `synthesis.md`. Phase 2 narrative agents read named sections of that file instead of being handed "the full synthesis".
+- **`files_analyzed` is now path → owning module slug.** It was documented as path → sha256 for change detection, but nothing read the hashes — `git diff` is and was the sole change signal — and the value had drifted to the literal placeholder `"analyzed"` for all 52 entries in the committed example vault. Its declared type (`object (string → string)`) is unchanged, so state-file validation is unaffected.
+- **Digest builds non-scoped module overviews from `synthesis.md` § Module Purposes** — one file read in place of N partial document reads — falling back to the previous per-doc extraction on v1 vaults. Digest remains strictly read-only and never migrates a vault.
+- **`roots` is a list, not a single path.** A module can span directories (release tooling covering `scripts/` and `.claude-plugin/`), and several logical modules can share one — `examples/dockhand` has Docker Engine, Database, Auth and Security, and Stacks and Git all inside `src/lib/server/`, which is the "flat structure" case `analysis-guide.md` Step 2 already supported. Because a shared root cannot attribute a file by path alone, resolution is a documented four-case order: exact `files_analyzed` hit, unique root prefix, ambiguous shared root (re-analyze every module sharing it, prefer full mode), then outside all modules.
+
+### Not changed
+- **`examples/dockhand/` is deliberately left at the v1 schema**, so it exercises the migration path rather than shipping reconstructed internals. Its `_state/modules/` reports were not back-derived from its module docs: none of those docs contains an API Reference section, so writing the spec'd `### Public API` ("every exported symbol as a code-fenced signature") would have meant inventing signatures that cannot be checked against source — the dockhand codebase is not part of this repository. The authoritative reference for the v2 artifact shape is `output-structure.md` § Analysis Artifacts. (`docs-vault/` is gitignored and local-only, so it is not a committed vault at all.)
+
 ## 2026-07-22
 
 ### Changed

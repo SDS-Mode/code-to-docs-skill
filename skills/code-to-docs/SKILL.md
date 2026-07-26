@@ -43,7 +43,20 @@ This skill uses three model tiers to balance cost and quality. Select tier based
 
 **Conditional escalation:** Use Opus for cross-module synthesis only when the codebase has 5+ modules or the dependency graph contains cycles or bidirectional dependencies. For simpler codebases (1-4 modules, tree-shaped dependencies), Sonnet handles synthesis adequately.
 
-**Conditional escalation for issues:** Use Opus for Limitations & Improvements analysis when a module's complexity is rated High, or when the module exceeds 1000 LOC, or when it involves concurrency or shared mutable state. Use Sonnet for Low/Medium complexity modules.
+**Conditional escalation for issues:** Use Opus for Limitations & Improvements analysis when a module's complexity is rated High, or when the module exceeds 1000 LOC, or when it involves concurrency or shared mutable state. Use Sonnet for Low/Medium complexity modules. The Pass 1 extraction agent evaluates these conditions and reports them as an `escalate` flag in its receipt — read the flag rather than re-deriving the judgment.
+
+---
+
+## Pass Pointers, Not Payloads
+
+**An agent prompt carries paths and small structured data — never the text of a file that exists on disk.** The orchestrator runs at Opus, so a pasted payload is charged twice: once as Opus output tokens retyping it, and again in the receiving agent's context.
+
+Two conventions make this work, and they apply to every phase:
+
+- **Agents write artifacts and return receipts.** An agent that produces a document writes it to its destination and returns a short structured summary — never the document itself, which would land in the orchestrator's context whether needed there or not.
+- **Phase 1 leaves durable artifacts to point at:** `_state/modules/<slug>.md` (one seven-section report per module) and `_state/synthesis.md` (cross-module facts in six fixed sections). Phase 2 agents read these by path.
+
+See `../code-to-docs-references/output-structure.md` "The Reference-Passing Rule" for the reference table and "Analysis Artifacts" for the file formats.
 
 ---
 
@@ -54,26 +67,26 @@ This skill uses three model tiers to balance cost and quality. Select tier based
 Read `../code-to-docs-references/analysis-guide.md` for detailed instructions.
 
 1. Survey the codebase — entry points, config files, directory structure
-2. Identify independent modules
+2. Identify independent modules, recording each one's name, slug, and root paths — these become durable wikilink and lookup identities in `module_index`. Roots are a **list** and may be shared between modules; file-level ownership in `files_analyzed` is what distinguishes them
 3. Dispatch parallel analysis agents (MUST parallelize if 3+ modules):
-   - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files)
-   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements), receiving the Haiku output as input. Escalate to Opus when the module is High complexity, exceeds 1000 LOC, **or** involves concurrency, shared mutable state, or security-sensitive logic (see the Model Tiers table above); Sonnet otherwise.
-4. Synthesize into dependency graph and architecture narrative — orchestrator for ≤4 modules, **Opus agent** for 5+ modules or complex dependency graphs
-5. Write `_state/analysis.json` (Haiku agent — mechanical data transform)
+   - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files), **write them to `_state/modules/<slug>.md`**, and return a receipt (report path, roots, complexity, LOC, deps, file list, `escalate` flag)
+   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements). Each is given the **path** to its module's report, reads it itself, **appends** section 7 to that same file, and returns structured issue records. Tier comes from the Pass 1 receipt's `escalate` flag — Opus when true, Sonnet when false.
+4. Synthesize from the receipts (not the reports) into a dependency graph and architecture narrative — orchestrator for ≤4 modules, **Opus agent** for 5+ modules or complex dependency graphs — and write `_state/synthesis.md`
+5. Write `_state/analysis.json` from the receipts (Haiku agent — mechanical data transform)
 
 ### Phase 2: Documentation Generation
 
-Read `../code-to-docs-references/obsidian-templates.md` for formatting rules. Read `../code-to-docs-references/output-structure.md` for vault layout.
+Read `../code-to-docs-references/obsidian-templates.md` for formatting rules. Read `../code-to-docs-references/output-structure.md` for vault layout and the authoritative Phase 2 dispatch table, whose Input column specifies **what to pass by reference** for each output.
 
 **Before dispatching:** Check if `obsidian` CLI is available (`which obsidian`). If yes, use `obsidian create` with `silent` flag for note creation. If no, use direct file writes. See `../code-to-docs-references/output-structure.md` "Obsidian CLI Integration" for details.
 
 Dispatch in parallel where possible:
 
-1. **Sonnet agent**: `Architecture/System Overview.md` (narrative writing)
-2. **Haiku agents** (parallel): `Architecture/System Map.canvas`, `Architecture/Dependency Map.md`, `Health/Health Summary.md` (severity charts), `Documentation.base`, `Index.md` (data transforms)
-3. **Sonnet agents** (parallel, one per module): `Modules/{Name}.md` — each receives its module's analysis report + synthesis context
-4. **Sonnet agent**: `Health/Limitations.md` and `Health/Code Review.md` (issue framing/judgment). `Health/Health Summary.md` is a mechanical chart transform — it is a **Haiku** task in step 2, per the authoritative Phase 2 dispatch table in `output-structure.md`, not a Sonnet task.
-5. (Full mode) **Sonnet agents**: `Patterns/`, `Onboarding/`, `Cross-Cutting/`
+1. **Sonnet agent**: `Architecture/System Overview.md` — reads `_state/synthesis.md` §§ Architecture Narrative, Architecture Type, System-Wide Patterns
+2. **Haiku agents** (parallel): `Architecture/System Map.canvas`, `Architecture/Dependency Map.md`, `Health/Health Summary.md` (severity charts), `Documentation.base`, `Index.md` — mechanical transforms over the dependency graph, `module_index`, and issue counts, all compact enough to pass inline
+3. **Sonnet agents** (parallel, one per module): `Modules/{Name}.md` — each is given the **path** to its module's `_state/modules/<slug>.md` plus `_state/synthesis.md` § Module Purposes for wikilink context
+4. **Sonnet agent**: `Health/Limitations.md` and `Health/Code Review.md` — issue records inline plus the report paths whose § Limitations & Improvements supplies the before/after snippets. `Health/Health Summary.md` is a mechanical chart transform — it is a **Haiku** task in step 2, per the authoritative Phase 2 dispatch table in `output-structure.md`, not a Sonnet task.
+5. (Full mode) **Sonnet agents**: `Patterns/`, `Onboarding/`, `Cross-Cutting/` — each reads the `_state/synthesis.md` sections named in the dispatch table, plus report paths for the modules involved
 
 ### Phase 3: Verification & Output
 
@@ -99,9 +112,14 @@ Dispatch in parallel where possible:
 7. Fabricating design rationale — say "Rationale not documented" instead
 8. Fabricating code issues — only report limitations/bugs/improvements that are evidently present in the code
 9. Using Opus for extraction or mechanical tasks — Haiku handles these; Opus is reserved for issue analysis on complex modules and cross-module synthesis on large codebases
-10. Issue analysis agents re-reading entire modules — they receive the Haiku report as input and should only read source files to verify specific concerns
+10. Issue analysis agents re-reading entire modules — they get a report **path** and should only read source files to verify specific concerns
 11. Dispatching an agent without setting the `model` parameter to match the dispatch table for that phase
 12. Setting a custom `fontFamily` in a Mermaid `%%{init}%%` directive — it clips every diagram label on GitHub's renderer; omit it (see `../code-to-docs-references/obsidian-templates.md` §5)
+13. **Pasting into an agent prompt any payload the agent could read from disk** — pass the path and name the section instead
+14. **A Pass 1 agent returning its full report** instead of writing `_state/modules/<slug>.md` and returning a receipt
+15. **Handing an agent "the full synthesis"** — synthesis lives in `_state/synthesis.md`; pass the path and the sections needed
+16. Re-deriving a Pass 2 tier by reading the report's prose instead of reading the receipt's `escalate` flag
+17. Reading back a file an agent just wrote in order to verify it — completeness is checked by grepping for required headings and by the Phase 3 verification agent
 
 ---
 
@@ -120,3 +138,8 @@ Dispatch in parallel where possible:
 | "This module is simple, I'll skip Pass 2" | Every module gets an issue analysis pass. Simple modules get Sonnet; the pass may report "None identified" — that's a valid outcome. |
 | "I'll just handle this inline instead of dispatching an agent" | The orchestrator runs at Opus. If the dispatch table says Haiku or Sonnet, dispatch an agent — doing the work inline costs 10-15x more. |
 | "A nicer `fontFamily` will make the diagrams look more polished" | It clips every label on GitHub — GitHub measures width in its default font but renders with yours. Never set `fontFamily` in a Mermaid init directive. |
+| "It's easier to paste the report than to explain where the file is" | The paste costs two copies of the report, one of them Opus output tokens. The path costs ~20 tokens. |
+| "I need to see all the module reports to synthesize" | You have the receipts — names, roots, complexity, deps. Read a report only where the cross-module narrative depends on that module's internals. |
+| "I'll have the agent return the report so I can check it before passing it on" | That return lands in your context at Opus, then again in the next prompt. Trust the receipt; Phase 3 verifies. |
+| "The report is short, pasting it is harmless" | Multiply by every module and every Phase 2 agent that needs it. The rule is what keeps that multiplication from happening. |
+| "I'll re-read the module's Complexity section to decide whether Pass 2 needs Opus" | The Pass 1 receipt already carries `escalate` and `escalate_reason`, set by the agent that actually read the code. |

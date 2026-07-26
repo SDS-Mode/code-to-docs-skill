@@ -96,12 +96,14 @@ Each dispatch prompt must include:
 
 **For metrics module:**
 - [ ] Module path: `src/metrics/`
+- [ ] Slug: `metrics`
 - [ ] Language: TypeScript
 - [ ] Entry point: `src/metrics/index.ts`
 - [ ] Files: `index.ts`, `aggregator.ts`, `types.ts`, `utils.ts`
 - [ ] Size estimate: ~850 lines
 - [ ] Dependencies: None (or "None — standalone utility")
 - [ ] Dependents: metrics is used by pipeline and transport (listed for context)
+- [ ] Report write path: `<vault>/_state/modules/metrics.md`
 
 **For pipeline module:**
 - [ ] Module path: `src/pipeline/`
@@ -138,6 +140,29 @@ Each dispatch prompt must include:
 - [ ] Size estimate: ~1100 lines
 - [ ] Dependencies: pipeline, storage, cache
 - [ ] Dependents: None (top-level entry point)
+
+#### Checkpoint 1.4 — Reference-Passing Discipline
+
+The prompts above carry *module facts*, which are small and belong inline. What must never appear inline is a document that exists on disk.
+
+**Pass 1 prompts:**
+- [ ] Each names a report write path under `_state/modules/` matching its module slug
+- [ ] Each instructs the agent to return **only** a receipt after writing — no report text, no summary prose
+- [ ] No Pass 1 prompt contains another module's analysis
+
+**Pass 1 returns:**
+- [ ] All 5 returns are receipt-shaped: a small JSON object with `report`, `roots`, `entry_points`, `language`, `complexity`, `loc`, `files`, `deps`, `escalate`
+- [ ] No return value contains `###` report sections
+- [ ] `escalate` is `true` for pipeline (~1200 LOC) and transport (~1100 LOC, WebSocket concurrency); check each receipt's `escalate_reason` names the triggering condition
+
+**Pass 2 prompts:**
+- [ ] Each contains the **path** `_state/modules/{slug}.md` — grep the transcript; **zero** Pass 2 prompts contain a pasted extraction report
+- [ ] Each module's Pass 2 model matches its receipt's `escalate` flag: Opus for pipeline and transport, Sonnet for metrics, storage, cache
+- [ ] The orchestrator did not read any `_state/modules/*.md` between Pass 1 and Pass 2 in order to make the tier decision — the flag comes from the receipt
+
+**Synthesis:**
+- [ ] The synthesis step builds the dependency graph from receipt `deps` fields, not by reading reports
+- [ ] With 5 modules, synthesis is dispatched to an **Opus agent** (per the ≥5 module rule), and its prompt carries receipts + report **paths**, not report text
 
 ---
 

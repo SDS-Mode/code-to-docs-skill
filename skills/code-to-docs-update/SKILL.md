@@ -7,6 +7,8 @@ description: Incrementally update an existing code-to-docs vault after coding ch
 
 Run an incremental documentation update instead of a full generation. Reads `_state/analysis.json` from the existing vault, diffs against the stored commit, re-analyzes only affected modules, and merges results with existing docs.
 
+**The governing idea:** touch only what changed. A module that did not change is carried forward by *leaving its analysis report alone* on disk — not by reading it, not by re-summarizing it, and never by re-deriving its boundaries. Anything the update needs to know about an unchanged module is already in `_state/analysis.json`.
+
 ## Related Skills
 
 | Skill | Purpose |
@@ -29,11 +31,23 @@ Skill(skill: "code-to-docs:code-to-docs-update", args: "<path> [--output <path>]
 - The codebase must be a git repository, **and** the vault's stored `git_commit` must be non-null and reachable in the current repo (needed for `git diff`)
 - If any prerequisite is missing, fall back to a full generate run and inform the user
 
+A vault written before the analysis artifacts existed (no `schema_version` / `module_index`) is **not** a missing prerequisite — it migrates in place with a one-time Haiku backfill. See Step 1 below.
+
 ---
 
 ## Model Tiers
 
 Same tiers as `code-to-docs:code-to-docs` — see that skill for the full table. Key rule: use the cheapest model that meets the task's cognitive demand. Haiku for extraction/mechanical, Sonnet for writing, Opus only for complex modules or large-codebase synthesis.
+
+Pass 2 tier selection reads the `escalate` flag from the module's fresh Pass 1 receipt — do not re-derive it from the report's prose.
+
+---
+
+## Pass Pointers, Not Payloads
+
+Same rule as `code-to-docs:code-to-docs`, and it is what makes an update cheap: agent prompts carry paths and small structured data, never the text of a file on disk. See `../code-to-docs-references/output-structure.md` "The Reference-Passing Rule".
+
+In update mode this has one specific consequence worth stating plainly: **carrying a module forward is a no-op.** Its `_state/modules/<slug>.md` report already sits at the path recorded in `module_index`, so an unchanged module costs zero reads and zero tokens. Reading it — or reading its generated `Modules/{Name}.md` — to "carry it forward" defeats the entire mechanism.
 
 ---
 
@@ -43,14 +57,14 @@ Same tiers as `code-to-docs:code-to-docs` — see that skill for the full table.
 
 The flow, in order:
 
-1. **Load & validate state** — read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run.
-2. **Check the stored commit, then diff** — if `git_commit` is null or unreachable (rebased/squashed/gc'd/shallow), fall back to full generate. Otherwise run `git diff <stored_commit>..HEAD --name-only`, and also capture the **content diff** of changed files inside known module roots (step 4 needs it). Empty diff → report "no changes" and exit.
-3. **Map changed files to modules** — build the affected-module list.
-4. **Auto-select quick/full** — decide *now*, from the changed-file list, `files_analyzed`, and the step-2 content diff (used to detect new cross-module imports). New/deleted module, changed dependency structure, or >50% churn → full; otherwise quick. When unsure, prefer full.
-5. **Re-analyze affected modules** — same two-pass analysis as baseline; carry unchanged modules forward without re-analysis.
-6. **Merge synthesis** — rebuild the dependency graph and merge issues (see Issue Tracking below).
-7. **Selective generation** — regenerate architecture, health, and affected module docs; preserve unchanged module docs.
-8. **Update state (with a concurrency guard)** — re-read the state file and abort if its `git_commit`/`timestamp` changed since step 1 (a concurrent update); otherwise write the new state and append a session entry.
+1. **Load & validate state** — read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run. If `schema_version` or `module_index` is absent, run the one-time v1 → v2 migration (Haiku-only backfill) and continue — do **not** fall back to full generate. Read only the state file here.
+2. **Check the stored commit, then diff** — if `git_commit` is null or unreachable (rebased/squashed/gc'd/shallow), fall back to full generate. Otherwise run `git diff <stored_commit>..HEAD --name-only`, and also capture the **content diff** of changed files inside known module roots, scoped by `module_index[*].roots` (step 4 needs it). Empty diff → report "no changes" and exit.
+3. **Map changed files to modules** — a lookup, not a survey: exact `files_analyzed[path]` hit, else a *unique* root prefix match, else an *ambiguous* match where modules share a root, else outside every module. See `output-structure.md` "Resolving a Changed File to Its Module". Build the affected-module list; everything else is carried forward.
+4. **Auto-select quick/full** — decide *now*, from the changed-file list, `files_analyzed`, `module_index`, and the step-2 content diff (used to detect new cross-module imports). New/deleted module, changed dependency structure, or >50% churn → full; otherwise quick. When unsure, prefer full.
+5. **Re-analyze affected modules** — same two-pass analysis as baseline, writing to each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. Unchanged modules are left alone entirely.
+6. **Merge synthesis** — rebuild the dependency graph from fresh receipts plus the stored graph, rewrite `_state/synthesis.md`, and merge issues (see Issue Tracking below).
+7. **Selective generation** — regenerate architecture, health, and affected module docs; preserve unchanged module docs. Pass inputs by reference per the Phase 2 dispatch table.
+8. **Update state (with a concurrency guard)** — re-read the state file and abort if its `git_commit`/`timestamp` changed since step 1 (a concurrent update); otherwise write the new state and append a session entry. Re-analyzed modules get fresh `module_index` entries; carried-forward modules keep their **original** `analyzed_at` / `source_commit`.
 9. **Verify** — Haiku agent checks wikilinks + frontmatter across the whole vault.
 
 ---
@@ -79,4 +93,18 @@ Marking an issue `resolved` requires positive evidence that the code it points a
 4. Re-analyzing unchanged modules — only affected modules get re-analyzed
 5. Skipping state-file validation, or overwriting state without the step-8 concurrency guard
 6. Deleting unchanged module docs — preserve them, only regenerate affected ones
-7. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases
+7. **Re-surveying the codebase to re-derive module roots** — `module_index` is authoritative; a re-survey can rename a module and break every wikilink pointing at it
+8. **Reading an unchanged module's `_state/modules/<slug>.md` or `Modules/{Name}.md`** — carrying forward means leaving the file alone, not loading it
+9. **Advancing a carried-forward module's `analyzed_at` / `source_commit`** — that falsely claims it was analyzed at this commit and destroys staleness tracking
+10. Falling back to a full generate run on a v1 state file instead of migrating it
+11. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
+
+## Rationalization Traps
+
+| Thought | Reality |
+|---------|---------|
+| "I need to see the unchanged modules to write a coherent system overview" | Their names, purposes, deps, and complexity are in `analysis.json`, and last run's one-liners are in `_state/synthesis.md` § Module Purposes. |
+| "I'll just re-glob for the module roots, it's cheap" | It is not free, and it is not safe: a redrawn boundary renames a module and orphans its doc. `module_index` is the contract. |
+| "This vault is the old schema, safest to regenerate from scratch" | Migration is a Haiku-only backfill. A full regenerate is exactly the cost this schema exists to avoid. |
+| "Re-analysis didn't mention that issue, so it's fixed" | Only if the diff touched the code it points at. Otherwise it is Pass 2 non-determinism — keep it `open`. |
+| "I'll refresh every module's timestamp so state looks consistent" | Then nothing records which reports are stale. Only re-analyzed modules get new timestamps. |

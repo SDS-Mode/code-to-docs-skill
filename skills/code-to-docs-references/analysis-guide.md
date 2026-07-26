@@ -53,10 +53,20 @@ A **module** is an independent subsystem that can be understood without reading 
 | Field | Content |
 |---|---|
 | Name | Title Case label (e.g., Auth, Payments, Worker Queue) |
-| Root path | Relative path from repo root |
+| Slug | Name lowercased, non-alphanumerics collapsed to single hyphens (`Worker Queue` → `worker-queue`, `Packaging & Release` → `packaging-release`) |
+| Root paths | **List** of the narrowest directories covering this module's files, relative to repo root |
 | Language | Primary language of this module |
 | Entry points | Files that are the module's public surface (index, main, exports) |
 | Suspected dependencies | Other modules or external packages this module calls |
+
+**Root paths are a list, and they need not be exclusive.** Two shapes are both normal:
+
+- A module spanning several directories — release tooling covering `scripts/` and `.claude-plugin/`.
+- Several modules **sharing** one directory — the flat-structure case above, where `src/lib/server/` holds Docker, Database, and Auth as separate logical modules. Each lists `src/lib/server/` as a root, and file-level ownership is what distinguishes them.
+
+That is why `files_analyzed` (path → owning module) is the primary lookup in later updates and `roots` is only the fallback for files that did not exist yet. See `output-structure.md` "Resolving a Changed File to Its Module".
+
+The name and root paths settled here are **durable**: they are written to `module_index` and become the module's wikilink identity and the key that future updates use to map changed files back to it. Renaming a module or redrawing its roots in a later run orphans its `Modules/{Name}.md` and breaks inbound wikilinks, so treat these as decisions rather than labels.
 
 ---
 
@@ -64,14 +74,16 @@ A **module** is an independent subsystem that can be understood without reading 
 
 Every `Agent()` call in Phase 1 MUST set `model:` to match this table.
 
-| Agent | Model | Input | Output | Condition |
-|-------|-------|-------|--------|-----------|
-| Extraction (×N) | **haiku** | module details + entry points | Sections 1-6 report | always, parallel if 3+ modules |
-| Issue Analysis (×N) | **sonnet** | extraction report | Section 7 report | complexity Low/Medium, <1000 LOC, no concurrency |
-| Issue Analysis (×N) | **opus** | extraction report | Section 7 report | complexity High, >1000 LOC, or concurrency/security |
-| Synthesis | **orchestrator** | all module reports | dep graph + narrative | ≤4 modules, tree-shaped deps |
-| Synthesis | **opus** | all module reports | dep graph + narrative | 5+ modules or cyclic deps |
-| State file write | **haiku** | synthesis output | `_state/analysis.json` | always |
+**Agents write artifacts and return receipts.** The Output column below names a *file the agent writes*, and the Returns column names the small structured value it hands back to the orchestrator. This is the core cost discipline of Phase 1: a full report returned through the orchestrator's context and then re-pasted into the next agent's prompt costs three copies of the same bytes, two of them at Opus. See `output-structure.md` "The Reference-Passing Rule".
+
+| Agent | Model | Input (by reference) | Output (writes) | Returns | Condition |
+|-------|-------|----------------------|-----------------|---------|-----------|
+| Extraction (×N) | **haiku** | module details + entry points | `_state/modules/<slug>.md` §§1-6 | extraction receipt | always, parallel if 3+ modules |
+| Issue Analysis (×N) | **sonnet** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: false` |
+| Issue Analysis (×N) | **opus** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: true` |
+| Synthesis | **orchestrator** | extraction receipts + report paths | `_state/synthesis.md` | — | ≤4 modules, tree-shaped deps |
+| Synthesis | **opus** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | 5+ modules or cyclic deps |
+| State file write | **haiku** | all receipts (inline) | `_state/analysis.json` | confirmation | always |
 
 ### Step 3: Parallel Agent Dispatch
 
@@ -81,42 +93,61 @@ For 1–2 modules, analyze sequentially in the current session.
 
 For 3+ modules, analysis is a two-pass process per module. Both passes dispatch in parallel across modules.
 
+**Either way, the artifacts are the same.** Sequential analysis still writes `_state/modules/<slug>.md` per module and still produces the receipts the later steps consume — the artifact layout is what update and digest depend on, so it is not an optimization that only applies to the parallel path.
+
 ---
 
 #### Pass 1: Extraction (Haiku agents)
 
 Dispatch one **Haiku** agent per module. These agents extract structured facts from the code — no judgment about quality or issues.
 
+**The agent writes its report to disk and returns only a receipt.** Do not ask it to return the report text. The report is the Pass 2 agent's input, and Pass 2 reads it from the path in the receipt — so the report never enters the orchestrator's context at all.
+
 **Haiku Agent Prompt Template:**
 
 ```
 You are extracting structured information from a single module of a codebase. Your job is to read the code and report facts. Do not evaluate code quality or suggest improvements — only extract what is there.
 
-Do not read files outside this module's root path unless they define types or interfaces this module directly imports.
+Do not read files outside this module's root paths unless they define types or interfaces this module directly imports. If another module shares one of your root directories, restrict yourself to the files listed below and the ones they import.
 
 ## Module Details
 
 - **Name:** [MODULE_NAME]
-- **Root path:** [MODULE_ROOT_PATH]
+- **Slug:** [MODULE_SLUG]
+- **Root paths:** [MODULE_ROOT_PATHS — one or more directories covering this module]
 - **Language:** [LANGUAGE]
 - **Entry points:** [COMMA_SEPARATED_ENTRY_POINT_PATHS]
 - **Known dependencies on other modules:** [LIST_OR_"none known"]
+- **Write your report to:** [VAULT_PATH]/_state/modules/[MODULE_SLUG].md
+- **Source commit:** [GIT_COMMIT_OR_"none"]
 
 ## Instructions
 
 Work in this order:
 
-1. List all files under the module root using Glob.
+1. List the files under your root paths using Glob. If a root is shared with another module, work only from your own entry points and the files they reach.
 2. For any file larger than 500 lines, use Grep to locate the key symbols (exports, class names, function signatures, route definitions) before reading. Never read a file over 500 lines in full without grepping first.
 3. Read entry point files in full.
 4. Trace the primary execution flow from the entry point — follow the call chain through at most 3 levels of depth.
 5. Identify repeated patterns (e.g., middleware chains, repository pattern, event emitter usage, decorators).
-6. Map all imports that reference paths outside this module root — these are the module's external dependencies.
+6. Map all imports that reference paths outside this module — these are the module's external dependencies.
 7. Assess complexity: estimate cyclomatic complexity by counting branching constructs in the core files; note any files with deeply nested logic or functions exceeding 100 lines.
 
-## Required Output Format
+## Step 1 — Write the report file
 
-Return exactly the following six sections. Do not add extra sections or omit any. Use the exact headings shown.
+Write your findings to the report path given above, overwriting it if it exists. The file has this exact frontmatter followed by exactly the six sections below. Use the exact headings shown — a later agent greps for these headings to read one section without reading the whole file.
+
+---
+module: [MODULE_NAME]
+slug: [MODULE_SLUG]
+roots:
+  - [one line per root path]
+language: [LANGUAGE]
+complexity: low | medium | high
+loc: <integer — total lines across the files you attributed to this module, excluding tests>
+analyzed-at: <current ISO 8601 timestamp>
+source-commit: [GIT_COMMIT_OR_"none"]
+---
 
 ### Architecture
 Describe the internal structure of this module. What is the top-level design pattern (MVC, service/repository, functional pipeline, actor model, etc.)? How are files organized within the module? Where does control flow enter and exit?
@@ -140,55 +171,92 @@ Provide a one-paragraph justification. Identify the single most complex file or 
 
 ### Key Files
 List the 3–7 files most important to understanding this module. For each, provide the path and a one-sentence description of its role.
+
+Do not add a "Limitations & Improvements" section — a later agent appends that.
+
+## Step 2 — Return the receipt
+
+After writing the file, return ONLY this JSON object and nothing else. No preamble, no summary, no excerpt of the report.
+
+{
+  "module": "[MODULE_NAME]",
+  "slug": "[MODULE_SLUG]",
+  "report": "_state/modules/[MODULE_SLUG].md",
+  "roots": ["[MODULE_ROOT_PATHS]"],
+  "entry_points": ["..."],
+  "language": "[LANGUAGE]",
+  "complexity": "low | medium | high",
+  "loc": <integer>,
+  "files": ["every file path you analyzed, relative to the repo root"],
+  "deps": ["names of other project modules this one depends on"],
+  "escalate": <true | false>,
+  "escalate_reason": "<short reason, or null if escalate is false>"
+}
+
+Set `escalate` to true if ANY of the following hold, and name which one in `escalate_reason`:
+- you rated complexity High
+- the module exceeds 1000 lines of code
+- the module involves concurrency, shared mutable state, async/sync bridging, or security-sensitive logic (auth, crypto, input validation, permissions)
+
+Otherwise set `escalate` to false and `escalate_reason` to null.
 ```
+
+**Why the receipt carries these fields.** Each one removes a downstream read the orchestrator would otherwise have to do:
+
+| Field | What it saves |
+|-------|---------------|
+| `report` | The Pass 2 prompt is a path, not a pasted report |
+| `deps` | The dependency graph builds from receipts alone — no report reads during synthesis |
+| `escalate` / `escalate_reason` | Resolves the Pass 2 model tier without the orchestrator reading the report's Complexity and Architecture prose to judge it. The agent that read the code makes the call |
+| `roots` / `entry_points` / `language` / `complexity` / `loc` | Populate `module_index` directly |
+| `files` | Populates `files_analyzed` as path → slug, so update can map a changed file to its module by lookup |
 
 ---
 
 #### Pass 2: Issue Analysis (Sonnet or Opus agents)
 
-After Pass 1 completes, dispatch one agent per module to produce the Limitations & Improvements section. These agents receive the Haiku extraction report as input — they do NOT re-read the code files unless they need to verify a specific concern.
+After Pass 1 completes, dispatch one agent per module to produce the Limitations & Improvements section. These agents are given **the path to the Pass 1 report** and read it themselves — they do NOT receive it pasted into their prompt, and they do NOT re-read the code files unless they need to verify a specific concern.
 
-**Model selection for Pass 2:**
+The agent **appends** section 7 to the same report file and returns structured issue records. Two things follow from that:
 
-| Condition | Model |
-|-----------|-------|
-| Module complexity is **High** | Opus |
-| Module exceeds **1000 LOC** | Opus |
-| Module involves concurrency, shared mutable state, or security-sensitive logic | Opus |
-| Module complexity is **Low** or **Medium** and none of the above apply | Sonnet |
+- The report file ends up holding the complete seven-section report, at one known path, ready for Phase 2 and for carry-forward on the next update.
+- The returned issue records are exactly the shape `analysis.json.issues` needs, so **the issues array assembles by concatenating Pass 2 returns** — no prose re-parsing, and the state-file writer never needs the synthesis.
 
-The complexity rating comes from the Haiku agent's Complexity section. If the Haiku report flags concurrency, thread safety, or async/sync bridging in the Architecture or Internal Patterns sections, escalate to Opus regardless of complexity rating.
+**Model selection for Pass 2:** read `escalate` from the module's Pass 1 receipt.
+
+| Receipt value | Model |
+|---------------|-------|
+| `escalate: true` | Opus |
+| `escalate: false` | Sonnet |
+
+The Pass 1 agent sets `escalate` from the same conditions that previously required judgment here — High complexity, >1000 LOC, or concurrency / shared mutable state / security-sensitive logic. It sets that flag having actually read the code, so **do not re-derive the tier by reading the report's prose.** If a receipt is missing or malformed, default to Opus and note it.
 
 **Issue Analysis Agent Prompt Template:**
 
 ```
-You are reviewing a module for limitations, bugs, risks, and improvement opportunities. You have already received a structured extraction report — use it as your primary source. Only read source files directly if you need to verify a specific concern.
+You are reviewing a module for limitations, bugs, risks, and improvement opportunities. A structured extraction report already exists for this module — read it and use it as your primary source. Only read source files directly if you need to verify a specific concern.
 
 ## Module Details
 
 - **Name:** [MODULE_NAME]
-- **Root path:** [MODULE_ROOT_PATH]
+- **Root paths:** [MODULE_ROOT_PATHS — one or more directories covering this module]
 - **Language:** [LANGUAGE]
-
-## Extraction Report (from prior analysis)
-
-[PASTE THE FULL HAIKU EXTRACTION REPORT HERE]
+- **Extraction report:** [VAULT_PATH]/_state/modules/[MODULE_SLUG].md
 
 ## Instructions
 
-Based on the extraction report above:
-
-1. Review the Architecture section for design constraints, missing abstraction boundaries, and scalability bottlenecks.
-2. Review the Public API section for inconsistent interfaces, missing error types, or unclear contracts.
-3. Review the Internal Patterns section for anti-patterns, deviations from conventions, or fragile implementations.
-4. Review the Complexity section — if a specific file or function was flagged, read it directly (Grep first if >500 lines) to assess whether the complexity is warranted or indicates a problem.
-5. If the extraction report mentions concurrency, async/sync bridging, shared state, or security-sensitive operations, read the relevant code sections to assess race conditions, deadlock potential, and data integrity risks.
+1. Read the extraction report at the path above. It contains six sections: Architecture, Public API, Internal Patterns, Dependencies, Complexity, Key Files.
+2. Review the Architecture section for design constraints, missing abstraction boundaries, and scalability bottlenecks.
+3. Review the Public API section for inconsistent interfaces, missing error types, or unclear contracts.
+4. Review the Internal Patterns section for anti-patterns, deviations from conventions, or fragile implementations.
+5. Review the Complexity section — if a specific file or function was flagged, read it directly (Grep first if >500 lines) to assess whether the complexity is warranted or indicates a problem.
+6. If the report mentions concurrency, async/sync bridging, shared state, or security-sensitive operations, read the relevant code sections to assess race conditions, deadlock potential, and data integrity risks.
 
 Only read source files when verifying a specific concern identified from the report. Do not re-read the entire module.
 
-## Required Output Format
+## Step 1 — Append your section to the report
 
-Return exactly one section:
+Append the following section to the END of the extraction report file, preserving everything already in it. Use this exact heading.
 
 ### Limitations & Improvements
 
@@ -197,44 +265,80 @@ For each issue, classify as one of:
 - **Bug or Risk** — code that is incorrect, fragile, or likely to fail under specific conditions (e.g., unhandled exception path, race condition, missing null check)
 - **Improvement Opportunity** — code that works but could be better (e.g., duplicated logic that should be extracted, overly complex function that should be split, missing error context, inconsistent naming)
 
-For each item provide: the file path and line range, a description of the issue, the severity (low/medium/high), and a suggested fix or approach. Do not fabricate issues — only report what is evidently present in the code. If the module is well-written with no notable issues, state that explicitly.
+For each item provide: the file path and line range, a description of the issue, the severity (low/medium/high), and a suggested fix or approach. Where the fix is clear, include a short before/after code snippet — the documentation generated later draws its educational content from this prose, so it must live in the file. Do not fabricate issues — only report what is evidently present in the code. If the module is well-written with no notable issues, state that explicitly.
+
+## Step 2 — Return the issue records
+
+After appending, return ONLY a JSON array of the issues you recorded, and nothing else. No preamble, no restatement of the prose.
+
+[
+  {
+    "id": "short-kebab-case-slug, unique within this module",
+    "type": "limitation | bug-risk | improvement",
+    "severity": "low | medium | high",
+    "file": "relative/path/to/file.ts",
+    "lines": "start-end, or null if not localised",
+    "summary": "one-line description"
+  }
+]
+
+Return an empty array [] if you found no issues. The prose you appended in Step 1 is the full record — the array is an index into it, so keep each summary to one line.
 ```
 
 ---
 
 ### Step 4: Synthesis
 
-After all Pass 1 and Pass 2 agents return (or after sequential analysis completes), combine their outputs into a unified report per module (sections 1-7), then synthesize across modules.
+After all Pass 1 and Pass 2 agents return, each module's complete seven-section report is sitting at `_state/modules/<slug>.md`, and the orchestrator holds only receipts. Synthesis works from the receipts, reading a report **only** where the cross-module story genuinely depends on that module's internals.
 
 **Model selection for synthesis:**
 
 | Condition | Approach |
 |-----------|----------|
 | ≤4 modules with tree-shaped dependencies (no cycles, no bidirectional) | Orchestrator performs synthesis directly (Sonnet-level) |
-| 5+ modules | Dispatch an **Opus agent** for synthesis — it receives all module reports as input |
+| 5+ modules | Dispatch an **Opus agent** — it receives the receipts plus the report paths |
 | Any number of modules with cycles or bidirectional dependencies | Dispatch an **Opus agent** — complex dependency reasoning needed |
+
+When dispatching the Opus agent, pass the receipt list inline (they are small) and the report **paths**. Never paste report contents into the synthesis prompt.
 
 **Synthesis steps:**
 
-1. **Collect all reports** — verify all seven sections are present in each module's combined report (6 from Haiku + 1 from Sonnet/Opus); flag missing sections before proceeding.
-2. **Build the cross-module dependency graph** — for each module, list what it depends on; identify cycles or bidirectional dependencies.
-3. **Identify system-wide patterns** — patterns that appear in 3+ modules are architectural conventions worth documenting at the top level.
-4. **Resolve naming consistency** — standardize module names across reports if agents used different labels for the same module.
+1. **Verify report completeness** — for each module, confirm the report file exists and contains all seven `###` headings. Grep for the headings; do not read the files in full. Flag any missing section before proceeding.
+2. **Build the cross-module dependency graph** — from the `deps` field of each receipt. Identify cycles or bidirectional dependencies. No report reads are needed for this step.
+3. **Identify system-wide patterns** — patterns that appear in 3+ modules are architectural conventions worth documenting at the top level. Grep the `### Internal Patterns` section of the reports rather than reading them whole.
+4. **Resolve naming consistency** — standardize module names if agents used different labels for the same module. Whatever names are settled on here become the wikilink identities for the whole vault and are recorded in `module_index`.
 5. **Determine architecture type** — classify the system as one of: monolith, microservices, modular monolith, plugin-based, or hybrid. Justify the classification.
 6. **Generate the top-level architecture narrative** — a 3–5 paragraph description of the system that a new engineer could read to understand how the pieces fit together.
-7. **Aggregate limitations and improvements** — collect all issues from agent reports, deduplicate, identify system-wide themes (e.g., "no error handling strategy across 4 modules"), and rank by severity. This feeds the Health/ directory in Phase 2.
+7. **Aggregate limitations and improvements** — from the Pass 2 issue records (already in hand), deduplicate, identify system-wide themes (e.g., "no error handling strategy across 4 modules"), and rank by severity. This feeds the Health/ directory in Phase 2.
 
-**Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Provide the synthesis output and have it populate **every** field of the state schema defined in `output-structure.md` "State File" — including `project`, `issues`, and `sessions`. The `issues` and `sessions` arrays are **required** (use `[]` only when genuinely empty); a state file missing them fails `output-structure.md` "State File Validation", which breaks the next update (falls back to full generate) and the next digest (aborts). Shape:
+**Write `_state/synthesis.md`** — record the results of steps 3, 5, 6, and 7 in the six-section format defined in `output-structure.md` "Analysis Artifacts", including a one-line purpose for every module under `## Module Purposes`. This file is what Phase 2's narrative agents read; it exists so no agent is ever handed "the full synthesis" as a payload. Write it in full on every run.
+
+**Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Its input is the **receipts**, not the synthesis: the Pass 1 receipts supply `module_index` and `files_analyzed`, and the Pass 2 issue records supply `issues`. Have it populate **every** field of the state schema defined in `output-structure.md` "State File" — including `project`, `issues`, and `sessions`. The `issues` and `sessions` arrays are **required** (use `[]` only when genuinely empty); a state file missing them fails `output-structure.md` "State File Validation", which breaks the next update and the next digest (aborts). Shape:
 
 ```json
 {
+  "schema_version": 2,
   "project": "project name or root basename",
   "modules": ["list of module names"],
+  "module_index": {
+    "Module Name": {
+      "slug": "module-name",
+      "roots": ["relative/path/"],
+      "entry_points": ["relative/path/index.ts"],
+      "language": "typescript",
+      "complexity": "medium",
+      "loc": 850,
+      "report": "_state/modules/module-name.md",
+      "doc": "Modules/Module Name.md",
+      "analyzed_at": "ISO 8601",
+      "source_commit": "HEAD commit hash or null"
+    }
+  },
   "dependency_graph": {
     "Module Name": ["Dependency Module A", "Dependency Module B"]
   },
   "files_analyzed": {
-    "relative/path/to/file.ts": "sha256 hash"
+    "relative/path/to/file.ts": "module-slug"
   },
   "git_commit": "HEAD commit hash or null if not a git repo",
   "timestamp": "ISO 8601",
@@ -244,13 +348,22 @@ After all Pass 1 and Pass 2 agents return (or after sequential analysis complete
 }
 ```
 
-On a baseline generate run, populate `issues` from the aggregated issues in synthesis step 7 (each with `status: "open"`) and `sessions` with one `"generate"` entry — do not ship the arrays empty if issues were found. See `output-structure.md` for the full schema description and incremental contract details.
+Field-by-field, this is a direct transform of receipt data — no judgment, which is why it is a Haiku task:
+
+| State field | Source |
+|-------------|--------|
+| `module_index` entries | Pass 1 receipt `roots` / `entry_points` / `language` / `complexity` / `loc`, plus the settled module name from synthesis step 4 |
+| `files_analyzed` | Pass 1 receipt `files`, each path mapped to that receipt's `slug` |
+| `dependency_graph` | Pass 1 receipt `deps` |
+| `issues` | Pass 2 issue records, each with the module name added and `status: "open"` |
+
+On a baseline generate run, populate `issues` from the Pass 2 records (each with `status: "open"`) and `sessions` with one `"generate"` entry — do not ship the arrays empty if issues were found. See `output-structure.md` for the full schema description and incremental contract details.
 
 ---
 
 ## Agent Output Schema
 
-All seven sections are required per module. Sections 1-6 come from the Haiku extraction agent; section 7 comes from the Sonnet/Opus issue analysis agent. Combine into one report per module before synthesis.
+All seven sections are required per module, and all seven live in **one file** at `_state/modules/<slug>.md`. Sections 1-6 are written there by the Haiku extraction agent; section 7 is appended there by the Sonnet/Opus issue analysis agent. There is no separate "combine" step — the file *is* the combined report, and its `###` headings are fixed so downstream agents can grep a single section.
 
 | Section | Source | Model | Content |
 |---|---|---|---|
@@ -307,11 +420,17 @@ These rules apply to all agents and to the orchestrating session.
 
 5. **Use the cheapest sufficient model** — Haiku for extraction and mechanical tasks, Sonnet for writing and standard issue analysis, Opus only when escalation conditions are met (see Step 3 and Step 4 model selection tables). Do not use Opus "just to be safe" — it costs 10-15x more than Haiku per token.
 
-6. **Pass 2 agents receive reports, not code** — issue analysis agents should work primarily from the Haiku extraction report. Only read source files to verify a specific concern. This avoids re-reading the entire module at a higher-cost model tier.
+6. **Pass 2 agents receive a report path, not code and not a pasted report** — issue analysis agents are given `_state/modules/<slug>.md` and read it themselves. Only read source files to verify a specific concern. This avoids both re-reading the entire module at a higher-cost tier and paying for the report twice in the orchestrator's context.
 
 7. **Parallel generation in Phase 2** — module docs, mechanical files (Canvas, Index, Dependency Map, state file), and health reports are independent outputs. Dispatch them in parallel to keep each agent's context small and focused.
 
-8. **Update mode: only re-analyze changed modules** — unchanged modules keep their existing reports. Do not re-run analysis on a module just because it was loaded into context. The `git diff` output is the sole source of truth for what changed.
+8. **Update mode: only re-analyze changed modules** — unchanged modules keep their existing reports **on disk, unread**. Carrying a module forward is a no-op, not a read. Do not re-run analysis on a module just because it was loaded into context. The `git diff` output is the sole source of truth for what changed.
+
+9. **Pass pointers, not payloads** — an agent prompt carries paths and small structured data (receipts, the dependency graph, issue records), never the text of a file that exists on disk. Inline context in an agent prompt is capped at roughly 500 tokens; above that, pass a path and name the section to read. The orchestrator runs at Opus, so a pasted payload is charged twice: once as Opus output tokens retyping it, and again in the receiving agent's context. See `output-structure.md` "The Reference-Passing Rule".
+
+10. **Agents write artifacts and return receipts** — an agent that produces a document writes it to its destination and returns a short structured summary. Never ask an agent to return a full report or document as its result, because the return value lands in the orchestrator's context whether it is needed there or not.
+
+11. **Do not read to verify** — resist reading back a file an agent just wrote to check it. Artifact completeness is verified by grepping for the required headings (synthesis step 1) and by the Phase 3 Haiku verification agent, not by the orchestrator reading content.
 
 ---
 
@@ -319,12 +438,17 @@ These rules apply to all agents and to the orchestrating session.
 
 This section applies when invoked via `code-to-docs:code-to-docs-update`. For baseline generation (`code-to-docs`), follow Steps 1-4 above.
 
+**The governing idea:** an update should touch only what changed. A module that did not change is carried forward by *leaving its report file alone* — not by reading it, not by re-summarizing it, and never by re-deriving its boundaries. If a step below seems to require knowing something about an unchanged module, that something is already in `analysis.json`.
+
 ### Update Step 1: Load and Validate Previous State
 
 1. Read `_state/analysis.json` from the existing vault at `--output` path
 2. If the file does not exist, abort update and fall back to a full generate run. Inform the user: "No previous state found — running full generation instead."
 3. Validate the state file against the schema in `output-structure.md` "State File Validation" section. If required fields are missing or have wrong types, report the validation error and fall back to a full generate run.
-4. Extract: `git_commit` (the commit hash from the last run), `modules` (module list), `dependency_graph`, `files_analyzed`, `issues`
+4. **Check the schema version.** If `schema_version` or `module_index` is absent, this is a v1 state file — run the one-time migration in `output-structure.md` "Schema Migration (v1 → v2)" before continuing, and report it to the user. Do **not** fall back to a full generate; the migration backfills with Haiku only.
+5. Extract: `git_commit` (the commit hash from the last run), `modules`, `module_index`, `dependency_graph`, `files_analyzed`, `issues`
+
+Load **only** the state file in this step. Do not read `_state/modules/*.md`, `_state/synthesis.md`, or any `Modules/*.md` — nothing in the update flow needs their contents in the orchestrator's context.
 
 ### Update Step 2: Diff
 
@@ -337,26 +461,31 @@ Only once the stored commit is confirmed reachable:
 
 1. Run `git diff <stored_git_commit>..HEAD --name-only` in the codebase root to get the changed file paths
 2. Filter out excluded paths (see Exclusions section)
-3. Capture the **content diff** for the changed files that fall within a known module's root path: `git diff <stored_git_commit>..HEAD -- <those paths>`. Step 4 needs the added lines to detect new cross-module imports; gathering it here (once) avoids a second diff pass
+3. Capture the **content diff** for the changed files that fall within a known module's root — the roots come from `module_index[*].roots`, so this is scoped without any survey: `git diff <stored_git_commit>..HEAD -- <those paths>`. Step 4 needs the added lines to detect new cross-module imports; gathering it here (once) avoids a second diff pass
 4. The result is the list of **changed files** (with content for module-root files) since the last documentation run
 
 If the diff is empty (no changes since last run), report "No changes since last documentation run" and exit without modifying the vault.
 
 ### Update Step 3: Map Changes to Modules
 
-For each changed file, look it up in the `files_analyzed` map to determine which module it belongs to.
+This is a **lookup, not a survey.** `files_analyzed` maps every previously analyzed path to its owning module slug, and `module_index` records every module's root paths. Both come from the state file loaded in Step 1.
+
+Resolve each changed file using the four-case order in `output-structure.md` "Resolving a Changed File to Its Module": exact `files_analyzed` hit, then a *unique* root prefix match, then an *ambiguous* match where modules share a root, then no match at all.
+
+**Never re-derive module roots by re-surveying the codebase.** `module_index` is authoritative for boundaries. A re-survey may draw a boundary differently and rename a module, which silently invalidates every `[[wikilink]]` pointing at the old name and orphans its `Modules/{Name}.md`.
 
 Classify the changes:
 
 | Category | Detection | Implication |
 |----------|-----------|-------------|
-| **Modified within existing module** | Changed file found in `files_analyzed` for a known module | Re-analyze that module |
-| **New file in existing module directory** | File path falls within a known module's root path but is not in `files_analyzed` | Re-analyze that module |
-| **New file outside all modules** | File path is not in any known module's root path | Potential new module — triggers full mode |
-| **Deleted file** | File in `files_analyzed` no longer exists on disk | Re-analyze the owning module |
-| **New top-level directory with source files** | New directory at project root containing code files | New module — triggers full mode |
+| **Modified within existing module** | Case 1 — `files_analyzed[path]` hit | Re-analyze that module |
+| **New file in one existing module's directory** | Case 2 — exactly one module's root prefixes the path | Re-analyze that module |
+| **New file in a directory shared by several modules** | Case 3 — more than one module's root prefixes the path | Re-analyze every module sharing that root, and prefer full mode — a new module may be hiding there |
+| **New file outside all modules** | Case 4 — no root prefixes the path | Potential new module — triggers full mode |
+| **Deleted file** | Path in `files_analyzed` no longer exists on disk | Re-analyze the owning module |
+| **New top-level directory with source files** | New directory at project root matching no root | New module — triggers full mode |
 
-Build the list of **affected modules** — modules that need re-analysis.
+Build the list of **affected modules** — modules that need re-analysis. Every other module in `modules` is **carried forward**: its report stays at `module_index[name].report` untouched, and its `analyzed_at` / `source_commit` are preserved unchanged.
 
 ### Update Step 4: Auto-Select Mode
 
@@ -364,10 +493,10 @@ Decide **before** re-analysis, using only signals available now: the changed-fil
 
 | Condition | How to detect it now | Mode |
 |-----------|----------------------|------|
-| All changes within existing modules, no new/deleted modules | every changed path maps to a known module (Step 3) | **Quick** |
-| New module detected | a changed/added path lies outside every known module root | **Full** |
+| All changes within existing modules, no new/deleted modules | every changed path resolves via Step 3 rule 1 or 2 | **Quick** |
+| New module detected | a changed/added path hits Step 3 rule 3 — outside every `module_index` root | **Full** |
 | Module deleted | every file of a module is gone from disk | **Full** |
-| Dependency structure changed | the Step 2.3 content diff has **added** (`+`) import/require lines in one module's files that reference another module's root path | **Full** |
+| Dependency structure changed | the Step 2.3 content diff has **added** (`+`) import/require lines in one module's files that resolve into a different module's `module_index` root | **Full** |
 | >50% of tracked files changed | `|changed ∩ files_analyzed keys| / |files_analyzed| > 0.5`, computed globally | **Full** |
 
 Detecting "new cross-module imports" scans only the added (`+`) lines of the Step 2.3 content diff for import/require/include statements whose target resolves into a *different* module's root than the file's own. This is a heuristic — it can over-trigger on comments or strings that look like imports. When in doubt, choose **Full**; it is the safe over-approximation.
@@ -376,24 +505,32 @@ Report the auto-selected mode to the user: "Update mode: quick (2 of 8 modules a
 
 ### Update Step 5: Re-Analyze Affected Modules
 
-For each affected module, run the same two-pass analysis as baseline:
+For each affected module, run the same two-pass analysis as baseline, writing to the **same report path** the module already has in `module_index`:
 
-1. **Haiku extraction** (sections 1-6) — same agent prompt template as Step 3 Pass 1
-2. **Sonnet/Opus issue analysis** (section 7) — same agent prompt template as Step 3 Pass 2, same model escalation rules
+1. **Haiku extraction** (sections 1-6) — same agent prompt template as Step 3 Pass 1. It **overwrites** `_state/modules/<slug>.md`, refreshing `analyzed-at` and `source-commit`.
+2. **Sonnet/Opus issue analysis** (section 7) — same agent prompt template as Step 3 Pass 2, tier chosen from the fresh Pass 1 receipt's `escalate` flag. It **appends** section 7 to the overwritten file.
 
-For **unchanged modules**, carry forward their existing reports from the previous run. Do not re-analyze.
+For **unchanged modules**, carrying forward is a no-op: their report files already sit at known paths with correct frontmatter, and their `module_index` entries are reused verbatim. Do not read them, do not re-summarize them, and do not re-analyze them.
 
-If auto-selected mode is **full**, also run Step 2 (Module Identification) to detect any new modules, then analyze those as well.
+If auto-selected mode is **full**, also run Step 2 (Module Identification) — but scoped to the paths that hit Step 3 rule 3, not the whole codebase — to identify any new modules, then analyze those as well. Existing module boundaries stay as `module_index` defines them.
 
 ### Update Step 6: Merge Synthesis
 
-Combine new analysis reports (affected modules) with carried-forward reports (unchanged modules) into a single synthesis.
+Synthesis in update mode works from the same inputs as baseline — receipts and paths — with the carried-forward modules represented by their existing `module_index` entries rather than fresh receipts.
+
+Assemble the synthesis input as:
+
+- **Affected modules** — the fresh Pass 1 receipts from Step 5
+- **Carried-forward modules** — their `module_index` entries (name, slug, root, complexity, loc, report path) plus their `dependency_graph` edges, all already loaded from state in Step 1
+- **Report paths** for every module, affected or not, so the synthesis agent can read one if the narrative genuinely needs its internals
+
+This is the step where the old flow leaked the most: there is no need to read an unchanged module's report or its generated doc to include it in the system story. Its name, purpose, dependencies, and complexity are all in state, and `_state/synthesis.md` § Module Purposes already carries the one-line purpose from last run.
 
 Run the same synthesis procedure as Step 4, but with awareness of what changed:
 
-1. Rebuild dependency graph from all module reports (new + carried forward)
+1. Rebuild dependency graph — fresh `deps` from the Step 5 receipts, carried-forward edges from the state's `dependency_graph`
 2. Compare new dependency graph to previous — flag any structural changes
-3. Regenerate architecture narrative (always — even small changes can shift the system story)
+3. Regenerate architecture narrative (always — even small changes can shift the system story) and **rewrite `_state/synthesis.md` in full**, preserving the § Module Purposes lines of unchanged modules
 4. Merge issues:
    - Issues in re-analyzed modules that the new analysis still reports: keep/replace with the new details, status `open`
    - Issues in unchanged modules: carry forward with status `open`
@@ -401,7 +538,7 @@ Run the same synthesis procedure as Step 4, but with awareness of what changed:
 
 ### Update Step 7: Selective Generation
 
-Use the same Phase 2 generation flow, but selectively:
+Use the same Phase 2 generation flow and the same dispatch table in `output-structure.md`, including its reference-based Input column — but selectively:
 
 | Output | When to regenerate |
 |--------|-------------------|
@@ -415,20 +552,29 @@ Use the same Phase 2 generation flow, but selectively:
 | `Onboarding/` (full mode) | Only if auto-selected full |
 | `Cross-Cutting/` (full mode) | Only if auto-selected full |
 | `Index.md` | Always (cheap, ensures consistency) |
+| `_state/synthesis.md` | Always (written in Step 6) |
+| `_state/modules/<slug>.md` for affected modules | Always (written in Step 5) |
+| `_state/modules/<slug>.md` for unchanged modules | **Never** — leave untouched, including frontmatter |
 | `_state/analysis.json` | Always (must reflect new state) |
+
+The always-regenerated cross-module outputs stay cheap precisely because their inputs are references: System Overview reads `_state/synthesis.md`, Dependency Map and Canvas take the graph inline, and the Health writers take issue records inline plus report paths for the modules they cover.
 
 ### Update Step 8: Update State File
 
 **Guard against a concurrent write first (optimistic concurrency).** Re-read `_state/analysis.json` and compare its `git_commit` and `timestamp` to the values loaded in Step 1. If either changed, another update ran while this one was in progress (for example a hook-triggered update racing a manual one) — abort without writing and tell the user to re-run, rather than clobber the other run's merged `issues` and `sessions` history.
 
 Then write `_state/analysis.json` with:
+- `schema_version` → `2`
 - `git_commit` → current HEAD
 - `timestamp` → now
 - `mode` → the auto-selected mode
 - `modules` → merged module list (may include new modules in full mode)
-- `files_analyzed` → merged map (updated entries for re-analyzed modules, carried forward for unchanged)
+- `module_index` → merged map: **replaced** entries for re-analyzed modules (fresh `complexity`, `loc`, `analyzed_at`, `source_commit` from their new receipts), **verbatim** entries for carried-forward modules — their `analyzed_at` and `source_commit` must keep the older values, since that is what makes the carry-forward auditable
+- `files_analyzed` → merged map (re-analyzed modules' file lists replaced from their receipts, carried forward for unchanged; drop entries for deleted files)
 - `issues` → merged array with status updates
 - `sessions` → append new session entry (see `output-structure.md` for schema)
+
+A carried-forward module whose `analyzed_at` silently advances to now is a bug: it claims the module was analyzed at this commit when it was not, and the next update loses the ability to tell how stale that report is.
 
 ### Update Step 9: Verify
 

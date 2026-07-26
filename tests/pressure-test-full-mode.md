@@ -168,8 +168,20 @@ Everything from the quick mode test, **plus** the following Phase 2 full-mode-sp
 
 - [ ] Codebase successfully surveyed (entry points, config identified)
 - [ ] 3+ modules identified and independent dispatch used if applicable
-- [ ] `_state/analysis.json` written with complete schema
+- [ ] `_state/analysis.json` written with complete schema, including `schema_version: 2` and a `module_index` entry per module
+- [ ] Every `files_analyzed` value is a module slug (not a hash, not `"analyzed"`)
+- [ ] `_state/modules/{slug}.md` exists per module, each with all seven `###` sections
+- [ ] `_state/synthesis.md` exists with all six `##` sections, and `## Module Purposes` has one line per module
 - [ ] All module dependencies correctly mapped
+
+### Reference-Passing Discipline
+
+Full mode dispatches the most Phase 2 agents, so it is the strongest test of this invariant.
+
+- [ ] Pass 1 agents return receipts; Pass 2 prompts carry report **paths**, not pasted reports
+- [ ] `Patterns/`, `Onboarding/`, and `Cross-Cutting/` agents receive named `_state/synthesis.md` sections plus report paths — **not** the full synthesis text and not pasted module reports
+- [ ] The `Onboarding/` agents in particular do not receive every module report inline (this is the largest payload in the old flow)
+- [ ] No agent prompt exceeds roughly 500 tokens of inline context beyond its instructions
 
 ### Phase 2 (Documentation Generation)
 

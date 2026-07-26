@@ -6,26 +6,45 @@ Supporting reference for the `code-to-docs` skill. Loaded on demand during Phase
 
 ---
 
+## The Reference-Passing Rule
+
+**An agent prompt carries pointers, not payloads.** If content exists on disk, pass its path — and the specific section to read — never its text. Inline context in an agent prompt is capped at roughly 500 tokens; anything larger must be a reference.
+
+This rule exists because the orchestrator runs at Opus. Every payload pasted into an `Agent()` prompt is Opus *output* tokens spent retyping bytes that already exist on disk, and those bytes then exist twice — once in the orchestrator's context and once in the agent's. Passing a path costs ~20 tokens and lets the agent read the content at its own (cheaper) tier.
+
+The analysis artifacts written in Phase 1 (see "Analysis Artifacts" below) exist to make this rule satisfiable: there is always a file to point at.
+
+| Instead of pasting | Pass this reference |
+|--------------------|---------------------|
+| A module's 7-section analysis report | `_state/modules/<slug>.md` |
+| The full synthesis output | `_state/synthesis.md`, naming the `##` sections needed |
+| One-line purposes of every module (wikilink context) | `_state/synthesis.md` § Module Purposes |
+| A module's issue prose and before/after snippets | `_state/modules/<slug>.md` § Limitations & Improvements |
+
+Small structured data — the dependency graph, the module list, issue records — is already compact and may be passed inline.
+
+---
+
 ## Phase 2 Dispatch Table
 
 This table is the authoritative dispatch reference for Phase 2. Every `Agent()` call MUST set `model:` to match the Model column.
 
-Dispatch as parallel agents where possible. Each agent receives only the data it needs — not the full synthesis.
+Dispatch as parallel agents where possible. The Input column is a **reference specification**, not a payload description — pass exactly what is listed, by path where a path is given. Never substitute pasted text for a listed path.
 
-| Output | Model | Input | Notes |
-|--------|-------|-------|-------|
-| `Architecture/System Overview.md` | **Sonnet** | Synthesis narrative + dependency graph | Narrative architecture writing |
-| `Architecture/Dependency Map.md` | **Haiku** | Dependency graph from synthesis | Data → Mermaid + table transform |
-| `Architecture/System Map.canvas` | **Haiku** | Module list + dependency graph | Data → JSON Canvas transform |
-| `Modules/{Name}.md` (×N) | **Sonnet** | That module's 7-section report + synthesis context for wikilinks | One agent per module, parallel |
-| `Health/Health Summary.md` | **Haiku** | Aggregated issue counts | Data → Mermaid chart transform |
-| `Health/Limitations.md` + `Health/Code Review.md` | **Sonnet** | Aggregated issues from synthesis | Requires judgment for framing |
-| `Patterns/{Name}.md` (full mode) | **Sonnet** | System-wide patterns from synthesis | Pattern identification + writing |
-| `Onboarding/` (full mode) | **Sonnet** | Full synthesis + module reports | Requires broad codebase understanding |
-| `Cross-Cutting/{Name}.md` (full mode) | **Sonnet** | Relevant cross-cutting data from synthesis | Requires cross-module reasoning |
-| `Documentation.base` | **Haiku** | Module list + metadata | Mechanical JSON assembly |
+| Output | Model | Input (by reference) | Notes |
+|--------|-------|----------------------|-------|
+| `Architecture/System Overview.md` | **Sonnet** | `_state/synthesis.md` §§ Architecture Narrative, Architecture Type, System-Wide Patterns + `dependency_graph` (inline) | Narrative architecture writing |
+| `Architecture/Dependency Map.md` | **Haiku** | `dependency_graph` + `modules` (inline — already compact) | Data → Mermaid + table transform |
+| `Architecture/System Map.canvas` | **Haiku** | `dependency_graph` + `modules` (inline) | Data → JSON Canvas transform |
+| `Modules/{Name}.md` (×N) | **Sonnet** | `_state/modules/<slug>.md` (all 7 sections) + `_state/synthesis.md` § Module Purposes | One agent per module, parallel |
+| `Health/Health Summary.md` | **Haiku** | Issue counts by severity/type/module (inline) | Data → Mermaid chart transform |
+| `Health/Limitations.md` + `Health/Code Review.md` | **Sonnet** | `issues` filtered by type (inline) + `_state/modules/<slug>.md` § Limitations & Improvements paths for the modules covered | Requires judgment for framing; the §7 prose supplies the before/after snippets |
+| `Patterns/{Name}.md` (full mode) | **Sonnet** | `_state/synthesis.md` § System-Wide Patterns + report paths of the modules exhibiting the pattern | Pattern identification + writing |
+| `Onboarding/` (full mode) | **Sonnet** | `_state/synthesis.md` (all sections) + `module_index` (inline) + report paths | Requires broad codebase understanding |
+| `Cross-Cutting/{Name}.md` (full mode) | **Sonnet** | `_state/synthesis.md` § Cross-Cutting Themes + report paths of the relevant modules | Requires cross-module reasoning |
+| `Documentation.base` | **Haiku** | `module_index` (inline) | Mechanical YAML assembly |
 | `Index.md` | **Haiku** | Project name + timestamp + mode | Template fill (Dataview fallback) |
-| `_state/analysis.json` | **Haiku** | Synthesis data | Mechanical JSON assembly |
+| `_state/analysis.json` | **Haiku** | Pass 1 + Pass 2 receipts (inline — receipt-sized by construction) | Mechanical JSON assembly |
 
 ---
 
@@ -34,7 +53,10 @@ Dispatch as parallel agents where possible. Each agent receives only the data it
 ```
 docs-vault/
 ├── _state/
-│   └── analysis.json           # Incremental contract state file
+│   ├── analysis.json           # Incremental contract state file (metadata only)
+│   ├── modules/
+│   │   └── {slug}.md           # Per-module 7-section analysis report
+│   └── synthesis.md            # Cross-module synthesis facts (section-addressable)
 ├── Architecture/
 │   ├── System Overview.md      # Top-level architecture narrative
 │   ├── Dependency Map.md       # Cross-module dependency Mermaid
@@ -204,7 +226,7 @@ views:
 
 This creates a table view of all generated docs grouped by type. Users can switch between table and card views, add computed columns, or modify filters directly in Obsidian.
 
-**Generation:** Haiku agent — this is a mechanical YAML transform from the module list and metadata.
+**Generation:** Haiku agent — this is a mechanical YAML transform from `module_index`.
 
 ---
 
@@ -244,19 +266,108 @@ When using obsidian CLI, the `obsidian-markdown`, `json-canvas`, and `obsidian-b
 
 ---
 
+## Analysis Artifacts
+
+Phase 1 writes two kinds of durable artifact alongside the state file. They are what make the reference-passing rule possible: every downstream agent has a file to point at instead of a payload to receive. They are also what makes an incremental update cheap — `code-to-docs:code-to-docs-update` carries an unchanged module forward by *leaving its report on disk*, not by reading it.
+
+Both are internal to the skill (like `analysis.json`) and are not part of the reader-facing vault.
+
+### `_state/modules/{slug}.md` — per-module analysis report
+
+One file per module, holding the seven-section report defined in `analysis-guide.md` "Agent Output Schema". **Sections 1–6 are written by the Pass 1 extraction agent; section 7 is appended by the Pass 2 issue-analysis agent.** No other agent writes to it.
+
+```markdown
+---
+module: Scheduler
+slug: scheduler
+roots:
+  - src/lib/server/scheduler/
+language: typescript
+complexity: high
+loc: 2400
+analyzed-at: 2026-03-29T12:00:00Z
+source-commit: 5c3f0fc
+---
+
+### Architecture
+### Public API
+### Internal Patterns
+### Dependencies
+### Complexity
+### Key Files
+### Limitations & Improvements
+```
+
+**Rules:**
+
+- `slug` is the module name lowercased with non-alphanumerics collapsed to single hyphens (`Docker Engine` → `docker-engine`, `Packaging & Release` → `packaging-release`). It must match the `slug` in `module_index` and the values in `files_analyzed`.
+- `roots` is a **list**, because a module is not always one directory: it may span several (release tooling covering `scripts/` and `.claude-plugin/`), and several logical modules may **share** one directory (a flat `src/lib/server/` holding Docker, Database, and Auth as separate modules — the case `analysis-guide.md` Step 2 calls a "flat structure"). Record the narrowest directories that cover the module's files.
+- The seven `###` headings are **exact and fixed**. Downstream agents Grep for a heading to read one section rather than the whole file — a renamed heading silently breaks that.
+- `source-commit` records the commit the report was extracted from, so an update can tell which reports are stale without re-reading them. `analyzed-at` is refreshed only when the module is actually re-analyzed.
+- On re-analysis, Pass 1 **overwrites** the file (frontmatter + sections 1–6) and Pass 2 **appends** section 7. Never partially patch a report.
+
+### `_state/synthesis.md` — cross-module synthesis
+
+One file, written by the synthesis step, holding the cross-module facts that Phase 2 narrative agents need. It replaces passing "the full synthesis" as a payload.
+
+```markdown
+---
+project: dockhand
+architecture-type: modular monolith
+module-count: 10
+synthesized-at: 2026-03-29T12:00:00Z
+source-commit: 5c3f0fc
+---
+
+## Architecture Narrative
+## Architecture Type
+## System-Wide Patterns
+## Module Purposes
+## Cross-Cutting Themes
+## Issue Themes
+```
+
+| Section | Content |
+|---------|---------|
+| **Architecture Narrative** | The 3–5 paragraph system description from synthesis step 6 |
+| **Architecture Type** | Classification (monolith / microservices / modular monolith / plugin-based / hybrid) plus justification |
+| **System-Wide Patterns** | Patterns appearing in 3+ modules, each named with the modules exhibiting it |
+| **Module Purposes** | One line per module: `- **Module Name** — one-sentence purpose.` This is the wikilink context for module-doc writers |
+| **Cross-Cutting Themes** | Concerns spanning modules (error handling, auth, real-time transport). Seeds `Cross-Cutting/` in full mode |
+| **Issue Themes** | System-wide issue patterns from synthesis step 7 (e.g. "no error-handling strategy across 4 modules") |
+
+The six `##` headings are exact and fixed, for the same Grep-addressability reason as the module reports. Rewrite this file in full on every generate or update run — it is cheap and always cross-module.
+
+---
+
 ## State File
 
-`_state/analysis.json` — written at the end of Phase 1. Schema:
+`_state/analysis.json` — written at the end of Phase 1. It holds **metadata only**: the analysis prose lives in the artifacts above. Schema:
 
 ```json
 {
+  "schema_version": 2,
   "project": "string — project name or root directory basename",
   "modules": ["list of module names as strings"],
+  "module_index": {
+    "Module Name": {
+      "slug": "module-name",
+      "roots": ["relative/path/to/module/"],
+      "entry_points": ["relative/path/to/module/index.ts"],
+      "language": "typescript",
+      "complexity": "low | medium | high",
+      "loc": 2400,
+      "report": "_state/modules/module-name.md",
+      "doc": "Modules/Module Name.md",
+      "analyzed_at": "ISO 8601",
+      "source_commit": "abc123 or null"
+    }
+  },
   "dependency_graph": {
     "Module Name": ["Dependency Module A", "Dependency Module B"]
   },
   "files_analyzed": {
-    "relative/path/to/file.ts": "sha256hexstring"
+    "relative/path/to/file.ts": "module-slug"
   },
   "git_commit": "abc123 or null if not a git repo",
   "timestamp": "ISO 8601",
@@ -291,7 +402,30 @@ When using obsidian CLI, the `obsidian-markdown`, `json-canvas`, and `obsidian-b
 ### State File Fields
 
 **Core fields** — written on every generate or update run:
-- `modules`, `dependency_graph`, `files_analyzed`, `git_commit`, `timestamp`, `mode` — snapshot of the codebase as of this run
+- `schema_version`, `modules`, `module_index`, `dependency_graph`, `files_analyzed`, `git_commit`, `timestamp`, `mode` — snapshot of the codebase as of this run
+
+**`schema_version`** — currently `2`. Its absence marks a v1 state file (see "Schema Migration" below).
+
+**`module_index`** — the module map, keyed by module name. This is the field that makes an incremental update a lookup instead of a re-survey: it persists each module's **root paths**, which `code-to-docs:code-to-docs-update` needs to decide which module a changed file belongs to and whether a path lies outside every module.
+
+`module_index` is **authoritative for module boundaries**. Never re-derive roots by re-surveying the codebase when it is present — a re-survey can draw a boundary differently, rename a module, and silently invalidate every `[[wikilink]]` pointing at the old name.
+
+The `report` and `doc` fields are vault-relative paths, so any agent can be handed a pointer without the orchestrator reconstructing it. `analyzed_at` / `source_commit` are **per module**, refreshed only when that module is re-analyzed — so an update can distinguish a freshly analyzed module from one carried forward, and the carry-forward is auditable.
+
+**`files_analyzed`** — maps each analyzed file to its **owning module slug**. This is file ownership, not change detection: `git diff` is the sole source of truth for what changed (see `analysis-guide.md` Token Efficiency Rules). Earlier revisions of this schema stored a content hash here; nothing read it, and it drifted to a placeholder in practice.
+
+### Resolving a Changed File to Its Module
+
+`files_analyzed` is exact and unambiguous, so it is always tried first. `roots` is the fallback for files that did not exist at the last analysis, and it can be ambiguous — resolve in this order:
+
+| Order | Condition | Resolution |
+|-------|-----------|------------|
+| 1 | `files_analyzed[path]` exists | That slug. Exact, O(1), the common case |
+| 2 | Exactly **one** module has a root that prefixes the path | That module — a new file added to it |
+| 3 | **Several** modules share a root that prefixes the path | Ambiguous. Re-analyze every module sharing that root, and prefer **full** mode so module identification re-runs scoped to that directory — a genuinely new module may be hiding there |
+| 4 | No root prefixes the path | Outside every module — potential new module, triggers **full** mode |
+
+Case 3 is not an edge case: in a flat layout, `Docker Engine`, `Database`, and `Auth and Security` can all list `src/lib/server/` as a root, so a new file there cannot be attributed by path alone. Re-analyzing the modules that share the directory is the safe over-approximation, consistent with the rule that when in doubt you choose full.
 
 **Issues array** — tracks codebase health across runs:
 - On generate: all issues start with `status: "open"`
@@ -307,7 +441,7 @@ When using obsidian CLI, the `obsidian-markdown`, `json-canvas`, and `obsidian-b
 
 The sessions array provides continuity across generate and update runs. `code-to-docs:code-to-docs-digest` **reads** it (to report how stale the docs are and what changed recently) but never writes it — so there is no `digest` session type.
 
-This is the **incremental contract**. The `code-to-docs:code-to-docs-update` skill reads this state, runs `git diff` against the stored commit, and re-analyzes only changed modules. The `code-to-docs:code-to-docs-digest` skill reads it to provide session-start context. The baseline skill writes this file on every run — do not skip writing it.
+This is the **incremental contract**, and `analysis.json` is its index: the state file records *where* things are and *what* is known about them, while the analysis prose lives in `_state/modules/` and `_state/synthesis.md`. The `code-to-docs:code-to-docs-update` skill reads this state, maps changed files to modules via `files_analyzed` and `module_index`, runs `git diff` against the stored commit, and re-analyzes only changed modules — carrying the rest forward by leaving their reports untouched on disk. The `code-to-docs:code-to-docs-digest` skill reads it to provide session-start context. The baseline skill writes all three artifacts on every run — do not skip any of them.
 
 ### State File Validation
 
@@ -323,7 +457,27 @@ Before reading `analysis.json` in update or digest mode, validate the following 
 | `mode` | string (`"quick"` or `"full"`) | yes |
 | `issues` | array of objects | yes (may be empty) |
 | `sessions` | array of objects | yes (may be empty) |
+| `schema_version` | number | v2 only — absence means v1, which is valid and migrates |
+| `module_index` | object (module name → object) | v2 only — absence means v1, which is valid and migrates |
 
 Each issue object must have: `id` (string), `module` (string), `type` (string), `severity` (string), `status` (string). Missing or malformed issues should be logged and skipped rather than causing a full abort.
 
-**Note:** `_state/` is internal to the skill. If the vault is committed to git, add `_state/` to `.gitignore` to avoid leaking file hashes and commit refs from the analyzed codebase.
+Each `module_index` entry must have `slug` (string), `roots` (non-empty array of strings), and `report` (string). A `module_index` key that is not in `modules`, or a `modules` entry with no `module_index` key, is a validation failure — the two must agree. Two modules sharing a root is **valid** (see "Resolving a Changed File to Its Module"), but two modules sharing a `slug` is not.
+
+**A missing `schema_version` or `module_index` is not a validation error.** It identifies a v1 state file, which is handled by migration, not rejection. Only the eight core fields above are mandatory for a state file to be usable.
+
+### Schema Migration (v1 → v2)
+
+A v1 state file predates the analysis artifacts. It is detected by **`schema_version` absent or `module_index` absent**, and it has three specific gaps: no module roots, no `_state/modules/` reports, and `files_analyzed` values that are content hashes or the placeholder string `"analyzed"` rather than module slugs.
+
+Migrate rather than falling back to a full generate — the point of this schema is to *avoid* forced regeneration:
+
+1. **Derive `module_index`.** A v1 `files_analyzed` has no module attribution, so recover it from each module doc: its `canonical-source` frontmatter names the module's primary file, and its `Dependencies` / API content names the rest. Set `roots` to the narrowest directories covering those files — several modules legitimately sharing one directory is fine. Survey the codebase only if attribution is genuinely undecidable. Rewrite `files_analyzed` values to module slugs.
+2. **Backfill missing reports with Pass 1 (Haiku) only.** This is the cheapest tier, and far cheaper than the v1 behaviour of reading generated prose docs into orchestrator context.
+3. **Recover section 7 for modules that are not being re-analyzed from the existing `issues` array**, which v1 already persists. No Sonnet or Opus spend in the backfill.
+4. **Write `_state/synthesis.md`** from the existing `Architecture/System Overview.md` and the module docs' opening paragraphs.
+5. **Tell the user**, e.g. `"v1 state detected — backfilling module index and 8 reports (one-time, Haiku)."`
+
+Then continue the run normally against v2. Write `schema_version: 2` on the way out.
+
+**Note:** `_state/` is internal to the skill. If the vault is committed to git, add `_state/` to `.gitignore` to avoid leaking commit refs and analysis internals from the analyzed codebase.
