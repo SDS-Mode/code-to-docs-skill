@@ -82,7 +82,7 @@ Every `Agent()` call in Phase 1 MUST set `model:` to match this table.
 | Extraction (×N) | **haiku** | module details + entry points | `_state/modules/<slug>.md` §§1-6 | extraction receipt | always, parallel if 3+ modules |
 | Issue Analysis (×N) | **sonnet** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: false` |
 | Issue Analysis (×N) | **opus** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | receipt `escalate: true` |
-| Synthesis | **orchestrator** | extraction receipts + report paths | `_state/synthesis.md` | — | ≤4 modules, tree-shaped deps |
+| Synthesis | **sonnet** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | ≤4 modules, tree-shaped deps |
 | Synthesis | **opus** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | 5+ modules or cyclic deps |
 | State file write | **haiku** | receipts (inline) + report paths for `files:` | `_state/analysis.json` | confirmation | always |
 
@@ -305,11 +305,13 @@ After all Pass 1 and Pass 2 agents return, each module's complete seven-section 
 
 | Condition | Approach |
 |-----------|----------|
-| ≤4 modules with tree-shaped dependencies (no cycles, no bidirectional) | Orchestrator performs synthesis directly (Sonnet-level) |
+| ≤4 modules with tree-shaped dependencies (no cycles, no bidirectional) | Dispatch a **Sonnet agent** — narrative writing at the tier that matches it |
 | 5+ modules | Dispatch an **Opus agent** — it receives the receipts plus the report paths |
 | Any number of modules with cycles or bidirectional dependencies | Dispatch an **Opus agent** — complex dependency reasoning needed |
 
-When dispatching the Opus agent, pass the receipt list inline (they are small) and the report **paths**. Never paste report contents into the synthesis prompt.
+Either way, **dispatch an agent — do not synthesize inline.** The orchestrator runs at Opus, so writing the narrative in the current session bills Sonnet-level work at Opus rates; that is the same mistake the dispatch tables exist to prevent. Dispatching is cheap here precisely because the inputs are receipts and paths, not documents.
+
+Pass the receipt list inline (they are small) and the report **paths**. Never paste report contents into the synthesis prompt.
 
 **Synthesis steps:**
 
@@ -322,6 +324,17 @@ When dispatching the Opus agent, pass the receipt list inline (they are small) a
 7. **Aggregate limitations and improvements** — from the Pass 2 issue records (already in hand), deduplicate, identify system-wide themes (e.g., "no error handling strategy across 4 modules"), and rank by severity. This feeds the Health/ directory in Phase 2.
 
 **Write `_state/synthesis.md`** — record the results of steps 3, 5, 6, and 7 in the five-section format defined in `output-structure.md` "Analysis Artifacts". This file is what Phase 2's narrative agents read; it exists so no agent is ever handed "the full synthesis" as a payload. Write it in full on every run. Per-module one-liners are **not** written here — they live in `module_index`.
+
+**Return a synthesis receipt** carrying the two facts the state file needs:
+
+```json
+{
+  "architecture_type": "modular monolith",
+  "system_patterns": ["Repository", "Event Bus"]
+}
+```
+
+These are stored in `analysis.json` so a later update can detect that the system-wide picture moved **without reading the previous `_state/synthesis.md` back**. Skipping them leaves `code-to-docs:code-to-docs-update` unable to tell whether `Architecture/System Overview.md` needs regenerating, and it will silently go stale.
 
 **Write `_state/analysis.json`** — dispatch a **Haiku agent** for this mechanical data transform. Its input is the **receipts plus the report paths**, not the synthesis: the Pass 1 receipts supply `module_index`, the reports' `files:` frontmatter supplies `files_analyzed`, and the Pass 2 issue records supply `issues`. Give the agent the receipt list inline and instruct it to read each report's frontmatter for the file list — that keeps the file paths out of the orchestrator entirely. Have it populate **every** field of the state schema defined in `output-structure.md` "State File" — including `project`, `issues`, and `sessions`. The `issues` and `sessions` arrays are **required** (use `[]` only when genuinely empty); a state file missing them fails `output-structure.md` "State File Validation", which breaks the next update and the next digest (aborts). Shape:
 
@@ -366,6 +379,7 @@ Field-by-field, this is a direct transform of receipt data — no judgment, whic
 | `files_analyzed` | The `files:` frontmatter of each report (read at Haiku), each path mapped to that report's `slug` |
 | `dependency_graph` | Pass 1 receipt `deps` |
 | `issues` | Pass 2 issue records, each with the module name added and `status: "open"` |
+| `architecture_type`, `system_patterns` | The synthesis receipt |
 
 Cross-check each report's `file_count` receipt field against the number of `files:` entries it actually read, and report any mismatch rather than silently writing a partial `files_analyzed` — an incomplete ownership map degrades the next update into re-surveying.
 
@@ -548,55 +562,64 @@ Run the same synthesis procedure as Step 4, but with awareness of what changed:
 4. Merge issues:
    - Issues in re-analyzed modules that the new analysis still reports: keep/replace with the new details, status `open`
    - Issues in unchanged modules: carry forward with status `open`
+   - Issues in a **deleted** module: mark `resolved`. Deletion is the one case where the evidence rule below is satisfied by removal rather than by a diff touching the lines — the code the issue points at is gone. Do this here, in the merge, not later: Step 8 writes whatever this step produces
    - Issues from a previous run that the new analysis no longer reports: mark `resolved` **only if** the changed files (Step 2) actually touched the issue's recorded `file` (and, when line ranges are recorded, overlap its `lines`). If the code the issue points at was **not** touched, the omission is almost certainly Pass 2 non-determinism, not a fix — keep the issue `open`. When unsure, keep it `open`. Marking `resolved` requires positive evidence that the referenced code changed.
 
 ### Update Step 7: Selective Generation
 
 Use the same Phase 2 generation flow and the same dispatch table in `output-structure.md`, including its reference-based Input column — but selectively.
 
-**First compute three change signals** from Step 6's merge. They are cheap comparisons over data already in hand, and they gate the cross-module outputs:
+**First compute the change signals** from Step 6's merge. They are cheap comparisons over data already in hand, and they gate the cross-module outputs.
+
+**A gate must cover every input its output actually consumes.** Look up the output's row in the `output-structure.md` Phase 2 dispatch table, and make sure a signal covers each thing listed in its Input column. A gate that omits one input does not merely regenerate less — it lets the output silently drift out of sync with the thing it projects.
 
 | Signal | True when |
 |--------|-----------|
-| `graph_changed` | The rebuilt `dependency_graph` differs from the stored one, **or** the module set changed (added/removed) |
-| `issues_changed` | The merged `issues` array differs from the stored one in any element — added, removed, or a changed `status`/`severity` |
+| `modules_changed` | A module was added or removed |
+| `graph_changed` | The rebuilt `dependency_graph` differs from the stored one, or `modules_changed` |
 | `purposes_changed` | Any module's `purpose` in `module_index` differs from the stored one |
+| `patterns_changed` | The synthesized `system_patterns` list differs from the stored one, or the synthesized `architecture_type` differs from the stored one |
+| `issues_changed` | The merged `issues` array differs from the stored one in any element (added, removed, changed `status`/`severity`), **or** any re-analyzed module has at least one issue — because Pass 2 rewrites its §7 prose, which the Health writers read |
 
-| Output | When to regenerate |
-|--------|-------------------|
-| `Architecture/System Overview.md` | Only if `graph_changed` or `purposes_changed` |
-| `Architecture/Dependency Map.md` | Only if `graph_changed` |
-| `Architecture/System Map.canvas` | Only if `graph_changed` |
-| `Modules/{Name}.md` for affected modules | Always |
-| `Modules/{Name}.md` for unchanged modules | **Never** — preserve existing |
-| `Health/Health Summary.md` | Only if `issues_changed` |
-| `Health/Limitations.md`, `Health/Code Review.md` | Only if `issues_changed` |
-| `Patterns/` (full mode) | Only if auto-selected full |
-| `Onboarding/` (full mode) | Only if auto-selected full |
-| `Cross-Cutting/` (full mode) | Only if auto-selected full |
-| `Index.md` | Always (Haiku template fill; keeps the timestamp honest) |
-| `_state/synthesis.md` | Always (written in Step 6) |
-| `_state/modules/<slug>.md` for affected modules | Always (written in Step 5) |
-| `_state/modules/<slug>.md` for unchanged modules | **Never** — leave untouched, including frontmatter |
-| `_state/analysis.json` | Always (must reflect new state) |
+`system_patterns` and `architecture_type` are stored in `analysis.json` for exactly this reason: without them, detecting a pattern change would require reading the previous `_state/synthesis.md`, which the update flow forbids.
 
-**Why gate rather than always regenerate.** These outputs are *projections* of the graph, the purposes, and the issue set. If none of those moved, regenerating produces near-identical prose at Sonnet cost and churns the vault's diff for no reader benefit. The common update — a bug fix inside one module that changes no imports — leaves `graph_changed` false, so Dependency Map, Canvas, and System Overview are all correctly skipped.
+| Output | When to regenerate | Inputs the gate must cover |
+|--------|-------------------|----------------------------|
+| `Architecture/System Overview.md` | If `graph_changed` **or** `purposes_changed` **or** `patterns_changed` | narrative, architecture type, system-wide patterns, dependency graph |
+| `Architecture/Dependency Map.md` | If `graph_changed` | dependency graph, module list |
+| `Architecture/System Map.canvas` | If `graph_changed` | dependency graph, module list |
+| `Modules/{Name}.md` for affected modules | Always | that module's report |
+| `Modules/{Name}.md` for unchanged modules | **Never** — preserve existing | — |
+| `Health/Health Summary.md` | If `issues_changed` | issue counts |
+| `Health/Limitations.md`, `Health/Code Review.md` | If `issues_changed` | issue records **and** §7 prose |
+| `Documentation.base` | If `modules_changed` **or** `purposes_changed` | `module_index` |
+| `Patterns/` (full mode) | If auto-selected full | system-wide patterns, report paths |
+| `Onboarding/` (full mode) | If auto-selected full | full synthesis, `module_index` |
+| `Cross-Cutting/` (full mode) | If auto-selected full | cross-cutting themes, report paths |
+| `Index.md` | Always (Haiku template fill; keeps the timestamp honest) | project, timestamp, mode |
+| `_state/synthesis.md` | Always (written in Step 6) | — |
+| `_state/modules/<slug>.md` for affected modules | Always (written in Step 5) | — |
+| `_state/modules/<slug>.md` for unchanged modules | **Never** — leave untouched, including frontmatter | — |
+| `_state/analysis.json` | Always (must reflect new state) | — |
 
-The signals are deliberately **structural**, not "did any file change": the architecture narrative describes the module set, their purposes, and how they connect, so those are exactly the inputs whose movement should trigger a rewrite. Note `issues_changed` fires on a resolved issue too, so a fix that closes a known issue *does* refresh `Health/` — which is right.
+**Why gate rather than always regenerate.** These outputs are *projections* of the graph, the purposes, the patterns, and the issue set. If none of those moved, regenerating produces near-identical prose at Sonnet cost and churns the vault's diff for no reader benefit. The common update — a bug fix inside one module that changes no imports and shifts no patterns — correctly skips Dependency Map, Canvas, and System Overview.
+
+**Why `patterns_changed` exists.** System-wide patterns are derived from the module reports, so re-analyzing a single module can change them with the graph and purposes both untouched. Gating System Overview on structure alone would let it drift: `synthesis.md` § System-Wide Patterns gets rewritten while the reader-facing document that projects it does not. Any gate you add later must be checked the same way — against the output's full Input column, not against intuition about what "usually" changes it.
+
+When any gating comparison is ambiguous — a malformed stored value, a signal you are not sure covers every input — **regenerate**. A redundant Sonnet call costs far less than a stale architecture doc that nothing will ever correct.
 
 Report what was skipped and why: `"Regenerated 3 files; skipped System Overview, Dependency Map, System Map (dependency graph and module purposes unchanged)."` A silent skip is indistinguishable from a bug.
 
-When any gating comparison is uncertain — a malformed stored graph, an unreadable previous value — **regenerate**. The cost of a redundant Sonnet call is far below the cost of a stale architecture doc.
-
-**Deletions.** When a module is removed (detected in Step 3, which forces full mode), clean up every artifact that referred to it, in this order:
+**Deletions.** When a module is removed (detected in Step 3, which forces full mode), clean up every artifact that referred to it:
 
 1. Delete `Modules/{Name}.md` and `_state/modules/<slug>.md`
 2. Remove its entry from `modules`, `module_index`, and `dependency_graph` — including edges *pointing at* it from other modules' dependency lists
 3. Drop its files from `files_analyzed`
-4. Keep its `issues`, but mark them `resolved` — the code they referenced is gone, which is positive evidence of removal and the one case where the Step 6 evidence rule is satisfied by deletion rather than by a diff touching the lines
-5. Note the removed title so Step 9 can sweep for now-broken inbound `[[wikilinks]]` from unchanged files
+4. Note the removed title so Step 9 can sweep for now-broken inbound `[[wikilinks]]` from unchanged files
 
-Skipping step 1 leaves an orphan report that every future update dutifully carries forward as a module that no longer exists.
+Its issues were already marked `resolved` during the Step 6 merge — that belongs with the rest of the issue merging, not here.
+
+Skipping step 1 leaves an orphan report that every future update dutifully carries forward as a module that no longer exists. Note that removing a module makes `modules_changed` and `graph_changed` true, so `Documentation.base`, the Dependency Map, and the Canvas all correctly regenerate without it.
 
 ### Update Step 8: Update State File
 
@@ -633,7 +656,16 @@ Guard the whole run, not just the write:
 2. **Re-check before writing anything (before Step 5).** Re-read `_state/analysis.json`. If `git_commit` or `timestamp` differs from the claim, another run got there first — abort **before** dispatching any analysis agent, so no report is written and nothing is corrupted. This is the cheap place to lose a race.
 3. **Re-check before writing state (Step 8).** As described above.
 
-**Detecting a torn run.** A report's `source-commit` frontmatter is the repair signal: for any module the state lists as analyzed at commit X, its report should record `source-commit: X`. A mismatch means a previous run was interrupted between Step 5 and Step 8. Treat that module as **affected** and re-analyze it, rather than carrying forward a report that does not match what state claims. Check this during Step 3 when building the affected-module list — it costs one frontmatter grep per module and turns a silent inconsistency into a self-healing one.
+**Detecting a torn or damaged carry-forward.** A report's `source-commit` frontmatter is the repair signal. During Step 3, for every module the state says is unchanged, check its report at `module_index[name].report`:
+
+| What you find | Meaning | Action |
+|---------------|---------|--------|
+| `source-commit` matches the module's stored `source_commit` | Healthy | Carry forward |
+| `source-commit` disagrees | A previous run was interrupted between Step 5 and Step 8 | Mark **affected**, re-analyze |
+| The file is **missing**, empty, or has no frontmatter | A crashed write, a manual deletion, or a partial checkout | Mark **affected**, re-analyze |
+| The file lacks one of the seven `###` headings | An interrupted Pass 2, or a Pass 1 that never got its §7 | Mark **affected**, re-analyze |
+
+All four checks are frontmatter and heading greps — one line per module, no section bodies. Carrying forward a report that is absent or inconsistent is worse than re-analyzing it: nothing downstream would detect the dead path, and the vault would keep claiming an analysis it does not have.
 
 ---
 

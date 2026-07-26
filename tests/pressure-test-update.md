@@ -82,9 +82,11 @@ A carried-forward module whose `analyzed_at` silently advances is a failure: it 
 The scenario change is a function-body edit: no new imports, no new files. So `graph_changed` and `purposes_changed` are both false, and the architecture projections should be **skipped**.
 
 - [ ] `Architecture/Dependency Map.md` and `System Map.canvas` were **not** regenerated (dependency graph unchanged) and are byte-identical
-- [ ] `Architecture/System Overview.md` was **not** regenerated (graph and purposes unchanged) and is byte-identical
+- [ ] `Architecture/System Overview.md` was **not** regenerated (graph, purposes, **and patterns** all unchanged) and is byte-identical
+- [ ] Cross-check the patterns gate: `jq -r '.system_patterns[]' _state/analysis.json` is unchanged from the baseline. If it moved, System Overview **must** have regenerated — a skip here would be the unsound-gate failure
 - [ ] The skip was **reported**, naming the unchanged signal — e.g. `"skipped System Overview, Dependency Map, System Map (dependency graph and module purposes unchanged)"`
-- [ ] `Health/` regenerated **iff** the merged issue set actually changed; if the edit resolved a known issue, it should have
+- [ ] `Health/` regenerated **iff** the merged issue set changed **or** the re-analyzed module has any issues (its §7 prose was rewritten)
+- [ ] `Documentation.base` was **not** regenerated (module set and purposes unchanged)
 - [ ] `Index.md` regenerated (Haiku template fill, keeps the timestamp honest)
 
 For whatever *did* regenerate, references still apply:
@@ -133,6 +135,7 @@ Re-run the update immediately, with no further changes:
 - [ ] It is re-checked **before Step 5 writes any report**, not only at Step 8
 - [ ] Simulate a race: after the update starts but before it writes reports, modify `_state/analysis.json`'s `timestamp` externally. The run must abort **before** any `_state/modules/*.md` is written — check their mtimes are unchanged
 - [ ] Simulate a torn run: hand-edit one module's report `source-commit` to disagree with state, then run update. That module is treated as **affected** and re-analyzed rather than carried forward
+- [ ] Simulate a damaged carry-forward three ways — **delete** an unchanged module's report, **truncate** one so it loses its `### Limitations & Improvements` heading, and **blank** one's frontmatter. Each must be detected and re-analyzed, not silently carried forward
 
 ### Checkpoint A.11 — Deleted Module Cleanup
 
@@ -142,7 +145,8 @@ Delete an entire module from the codebase, commit, and run update.
 - [ ] `Modules/{Name}.md` and `_state/modules/<slug>.md` are both **removed**
 - [ ] The module is gone from `modules`, `module_index`, and `files_analyzed`
 - [ ] Edges **pointing at** it are removed from other modules' `dependency_graph` lists
-- [ ] Its issues are marked `resolved` (deletion is positive evidence the code is gone)
+- [ ] Its issues are marked `resolved` **by the Step 6 merge**, not as an afterthought in Step 7 (deletion is positive evidence the code is gone)
+- [ ] `Documentation.base` regenerated — the module set changed, so it must no longer list the deleted module
 - [ ] Verification swept for inbound `[[wikilinks]]` to the removed title, and any that existed were reported
 
 ---
@@ -177,13 +181,15 @@ Make a one-module change in the codebase, commit, then run:
 
 This is what makes migration cheaper than regeneration, so it is the checkpoint that matters most.
 
-- [ ] Backfill agents are **all Haiku** — zero Sonnet or Opus agents dispatched for backfill
+- [ ] Backfill agents are **all Haiku** — zero Sonnet or Opus agents dispatched for backfill, including the one that appends §7
 - [ ] Section 7 for modules not being re-analyzed is recovered from the existing `issues` array, **not** by dispatching Pass 2
 - [ ] The module that actually changed still gets a normal two-pass re-analysis (Pass 2 at the tier its receipt's `escalate` flag indicates)
 
 ### Checkpoint B.3 — Migration Output Is Valid v2
 
-- [ ] `_state/modules/<slug>.md` now exists for **every** module, each with all seven `###` sections
+- [ ] `_state/modules/<slug>.md` now exists for **every** module, each with all seven `###` sections — including `### Limitations & Improvements`, appended by the second Haiku agent from the v1 `issues` array
+- [ ] `architecture_type` and `system_patterns` are populated in state (or `system_patterns` is empty, which must force a System Overview regeneration on the next run)
+- [ ] The user was told that migrated modules' Health detail is limited until they are next re-analyzed
 - [ ] `_state/synthesis.md` exists with all five `##` sections
 - [ ] `schema_version` is `2` and `module_index` has one entry per module with an existing `report` path
 - [ ] Every `files_analyzed` value is now a slug present in `module_index` — no `"analyzed"` placeholders remain

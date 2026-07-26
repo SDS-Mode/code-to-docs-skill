@@ -166,7 +166,8 @@ This is the cost invariant — check the transcript, not just the output files.
 
 - [ ] `_state/analysis.json` exists
 - [ ] File is valid JSON
-- [ ] Contains fields: `schema_version`, `project`, `modules`, `module_index`, `dependency_graph`, `files_analyzed`, `git_commit`, `timestamp`, `mode`, `issues`, `sessions`
+- [ ] Contains fields: `schema_version`, `project`, `modules`, `module_index`, `dependency_graph`, `architecture_type`, `system_patterns`, `files_analyzed`, `git_commit`, `timestamp`, `mode`, `issues`, `sessions`
+- [ ] `architecture_type` and `system_patterns` match what `_state/synthesis.md` §§ Architecture Type / System-Wide Patterns say — they exist so an update can detect a shift without reading that file
 - [ ] `schema_version` equals `2`
 - [ ] `modules` array lists all identified modules by name
 - [ ] `module_index` has one entry per name in `modules`, and no extra keys

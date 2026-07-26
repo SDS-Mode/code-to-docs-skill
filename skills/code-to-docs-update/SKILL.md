@@ -59,11 +59,11 @@ The flow, in order:
 
 1. **Load & validate state** — read and schema-validate `_state/analysis.json`; on missing or malformed state, fall back to a full generate run. If `schema_version` or `module_index` is absent, run the one-time v1 → v2 migration (Haiku-only backfill) and continue — do **not** fall back to full generate. Record the loaded `git_commit`/`timestamp` as this run's concurrency claim. Read only the state file here.
 2. **Check the stored commit, then diff** — if `git_commit` is null or unreachable (rebased/squashed/gc'd/shallow), fall back to full generate. Otherwise run `git diff <stored_commit>..HEAD --name-only`, and also capture the **content diff** of changed files inside known module roots, scoped by `module_index[*].roots` (step 4 needs it). Empty diff → report "no changes" and exit.
-3. **Map changed files to modules** — a lookup, not a survey: exact `files_analyzed[path]` hit, else a *unique* root prefix match, else an *ambiguous* match where modules share a root, else outside every module. See `output-structure.md` "Resolving a Changed File to Its Module". Also mark as affected any module whose report `source-commit` disagrees with state (a torn previous run). Build the affected-module list; everything else is carried forward.
+3. **Map changed files to modules** — a lookup, not a survey: exact `files_analyzed[path]` hit, else a *unique* root prefix match, else an *ambiguous* match where modules share a root, else outside every module. See `output-structure.md` "Resolving a Changed File to Its Module". Also mark as affected any module whose carried-forward report is damaged — mismatched `source-commit`, missing file, or a missing `###` heading. Build the affected-module list; everything else is carried forward.
 4. **Auto-select quick/full** — decide *now*, from the changed-file list, `files_analyzed`, `module_index`, and the step-2 content diff (used to detect new cross-module imports). New/deleted module, changed dependency structure, or >50% churn → full; otherwise quick. When unsure, prefer full.
 5. **Re-analyze affected modules** — re-check the concurrency claim *before writing anything*, then run the same two-pass analysis as baseline against each module's existing report path: Pass 1 overwrites sections 1-6, Pass 2 appends section 7. Unchanged modules are left alone entirely.
 6. **Merge synthesis** — rebuild the dependency graph from fresh receipts plus the stored graph, rewrite `_state/synthesis.md`, and merge issues (see Issue Tracking below).
-7. **Selective generation** — regenerate affected module docs always; gate the cross-module outputs on whether the dependency graph, module purposes, or issue set actually moved, and report what was skipped. Clean up every artifact of a deleted module. Pass inputs by reference per the Phase 2 dispatch table.
+7. **Selective generation** — regenerate affected module docs always; gate each cross-module output on signals covering **every input in its dispatch-table row** (graph, purposes, patterns, issues, module set), and report what was skipped. Clean up every artifact of a deleted module. Pass inputs by reference per the Phase 2 dispatch table.
 8. **Update state (with a concurrency guard)** — re-read the state file and abort if its `git_commit`/`timestamp` changed since step 1 (a concurrent update); otherwise write the new state and append a session entry. Re-analyzed modules get fresh `module_index` entries; carried-forward modules keep their **original** `analyzed_at` / `source_commit`.
 9. **Verify** — Haiku agent checks wikilinks + frontmatter across the files written this run, plus (only if something was deleted or renamed) files carrying links to the removed titles.
 
@@ -101,7 +101,8 @@ Marking an issue `resolved` requires positive evidence that the code it points a
 12. **Writing reports without re-checking the concurrency claim first** — losing the race after Step 5 leaves your reports beside another run's state
 13. **Leaving a deleted module's report or doc on disk** — every future update carries it forward as a module that no longer exists
 14. **Skipping a cross-module regeneration without saying so** — a silent skip is indistinguishable from a bug; report what was skipped and which signal was unchanged
-15. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
+15. **Gating an output on signals that miss one of its dispatch-table inputs** — e.g. gating System Overview on the graph alone when it also consumes system-wide patterns; the output then drifts out of sync with what it projects
+16. All red flags from `code-to-docs:code-to-docs` also apply during the re-analysis phases — including its reference-passing rules
 
 ## Rationalization Traps
 
@@ -112,5 +113,6 @@ Marking an issue `resolved` requires positive evidence that the code it points a
 | "This vault is the old schema, safest to regenerate from scratch" | Migration is a Haiku-only backfill. A full regenerate is exactly the cost this schema exists to avoid. |
 | "Re-analysis didn't mention that issue, so it's fixed" | Only if the diff touched the code it points at. Otherwise it is Pass 2 non-determinism — keep it `open`. |
 | "I'll refresh every module's timestamp so state looks consistent" | Then nothing records which reports are stale. Only re-analyzed modules get new timestamps. |
-| "Regenerating the architecture docs anyway is safer than deciding whether to" | Only if something they describe moved. Gate on the graph, the purposes, and the issue set — and say out loud what you skipped. |
+| "Regenerating the architecture docs anyway is safer than deciding whether to" | Only if something they describe moved — but the gate must cover *every* input in the output's dispatch-table row, not just the obvious ones. Say out loud what you skipped. |
+| "The graph didn't change, so the architecture narrative can't have" | System-wide patterns are an input too, and re-analysing one module can shift them. That is why `patterns_changed` exists. |
 | "The race is unlikely, one guard at the end is enough" | Reports are written three steps earlier. Losing at Step 8 then leaves your reports beside the winner's state. |

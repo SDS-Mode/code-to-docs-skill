@@ -71,7 +71,7 @@ Read `../code-to-docs-references/analysis-guide.md` for detailed instructions.
 3. Dispatch parallel analysis agents (MUST parallelize if 3+ modules):
    - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files), **write them to `_state/modules/<slug>.md`**, and return a receipt (report path, roots, complexity, LOC, deps, file list, `escalate` flag)
    - **Sonnet or Opus agents** then produce section 7 (limitations & improvements). Each is given the **path** to its module's report, reads it itself, **appends** section 7 to that same file, and returns structured issue records. Tier comes from the Pass 1 receipt's `escalate` flag — Opus when true, Sonnet when false.
-4. Synthesize from the receipts (not the reports) into a dependency graph and architecture narrative — orchestrator for ≤4 modules, **Opus agent** for 5+ modules or complex dependency graphs — and write `_state/synthesis.md`
+4. Synthesize from the receipts (not the reports) into a dependency graph and architecture narrative — **Sonnet agent** for ≤4 tree-shaped modules, **Opus agent** for 5+ modules or complex dependency graphs — and write `_state/synthesis.md` plus a receipt carrying `architecture_type` and `system_patterns`
 5. Write `_state/analysis.json` from the receipts (Haiku agent — mechanical data transform)
 
 ### Phase 2: Documentation Generation

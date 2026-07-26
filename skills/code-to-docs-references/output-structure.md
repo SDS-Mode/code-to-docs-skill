@@ -371,6 +371,8 @@ The five `##` headings are exact and fixed, for the same Grep-addressability rea
   "dependency_graph": {
     "Module Name": ["Dependency Module A", "Dependency Module B"]
   },
+  "architecture_type": "modular monolith",
+  "system_patterns": ["Repository", "Event Bus"],
   "files_analyzed": {
     "relative/path/to/file.ts": "module-slug"
   },
@@ -417,6 +419,8 @@ The five `##` headings are exact and fixed, for the same Grep-addressability rea
 
 The `report` and `doc` fields are vault-relative paths, so any agent can be handed a pointer without the orchestrator reconstructing it. `analyzed_at` / `source_commit` are **per module**, refreshed only when that module is re-analyzed — so an update can distinguish a freshly analyzed module from one carried forward, and the carry-forward is auditable.
 
+**`architecture_type` and `system_patterns`** — the classification and the pattern names produced by synthesis. They are stored here, rather than only in `_state/synthesis.md`, so an update can tell whether the system-wide picture moved **without reading the previous synthesis back**. `code-to-docs:code-to-docs-update` gates regeneration of `Architecture/System Overview.md` on them; omitting them would let that document drift out of sync with the synthesis it projects.
+
 **`files_analyzed`** — maps each analyzed file to its **owning module slug**. This is file ownership, not change detection: `git diff` is the sole source of truth for what changed (see `analysis-guide.md` Token Efficiency Rules). Earlier revisions of this schema stored a content hash here; nothing read it, and it drifted to a placeholder in practice.
 
 ### Resolving a Changed File to Its Module
@@ -462,6 +466,8 @@ Before reading `analysis.json` in update or digest mode, validate the following 
 | `mode` | string (`"quick"` or `"full"`) | yes |
 | `issues` | array of objects | yes (may be empty) |
 | `sessions` | array of objects | yes (may be empty) |
+| `architecture_type` | string | v2 only |
+| `system_patterns` | array of strings | v2 only (may be empty) |
 | `schema_version` | number | v2 only — absence means v1, which is valid and migrates |
 | `module_index` | object (module name → object) | v2 only — absence means v1, which is valid and migrates |
 
@@ -477,11 +483,19 @@ A v1 state file predates the analysis artifacts. It is detected by **`schema_ver
 
 Migrate rather than falling back to a full generate — the point of this schema is to *avoid* forced regeneration:
 
-1. **Derive `module_index`.** A v1 `files_analyzed` has no module attribution, so recover it from each module doc: its `canonical-source` frontmatter names the module's primary file, and its `Dependencies` / API content names the rest. Set `roots` to the narrowest directories covering those files — several modules legitimately sharing one directory is fine. Survey the codebase only if attribution is genuinely undecidable. Rewrite `files_analyzed` values to module slugs.
+1. **Derive `module_index`.** A v1 `files_analyzed` has no module attribution, so recover it from each module doc: its `canonical-source` frontmatter names the module's primary file, and its `Dependencies` / API content names the rest. Set `roots` to the narrowest directories covering those files — several modules legitimately sharing one directory is fine. Take each module's `purpose` from the opening sentence of its doc's `### What Is This?`. Survey the codebase only if attribution is genuinely undecidable. Rewrite `files_analyzed` values to module slugs.
+
 2. **Backfill missing reports with Pass 1 (Haiku) only.** This is the cheapest tier, and far cheaper than the v1 behaviour of reading generated prose docs into orchestrator context.
-3. **Recover section 7 for modules that are not being re-analyzed from the existing `issues` array**, which v1 already persists. No Sonnet or Opus spend in the backfill.
-4. **Write `_state/synthesis.md`** from the existing `Architecture/System Overview.md` and the module docs' opening paragraphs.
-5. **Tell the user**, e.g. `"v1 state detected — backfilling module index and 8 reports (one-time, Haiku)."`
+
+3. **Append section 7 to each backfilled report with a second Haiku agent.** The Pass 1 prompt deliberately forbids writing §7, so something must add it or every backfilled report stops at §6 — which fails the seven-heading check in `analysis-guide.md` synthesis step 1 and leaves the module looking damaged to the next update. This agent does **not** analyse anything; it reformats issue records that v1 already persisted:
+
+   > Read the `issues` array entries whose `module` is `[MODULE_NAME]`. Append a `### Limitations & Improvements` section to `_state/modules/[MODULE_SLUG].md` with one entry per issue, giving its type, severity, file, line range, and summary. Do not evaluate the code, do not add issues, and do not read source files. If there are no issues for this module, write "None recorded in the previous run's state."
+
+   Note the resulting §7 carries **no before/after code snippets** — v1 state stored only issue records, not the prose. A migrated module's `Health/` entries will therefore be thinner than a freshly analysed one's until that module is next re-analysed. Say so rather than letting it look like the module is clean.
+
+4. **Write `_state/synthesis.md`** from the existing `Architecture/System Overview.md`, and populate `architecture_type` and `system_patterns` in state from it. If the System Overview is missing, leave `system_patterns` empty — an empty stored list makes `patterns_changed` true on the next run, which regenerates the System Overview. That is the correct fallback: it fails toward a rewrite, not toward silent staleness.
+
+5. **Tell the user**, e.g. `"v1 state detected — backfilling module index and 8 reports (one-time, Haiku). Health detail for these modules is limited to what the previous state recorded until they are next re-analysed."`
 
 Then continue the run normally against v2. Write `schema_version: 2` on the way out.
 
