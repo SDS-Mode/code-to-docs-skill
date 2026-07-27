@@ -43,7 +43,7 @@ This skill uses three model tiers to balance cost and quality. Select tier based
 
 **Conditional escalation:** Use Opus for cross-module synthesis only when the codebase has 5+ modules or the dependency graph contains cycles or bidirectional dependencies. For simpler codebases (1-4 modules, tree-shaped dependencies), Sonnet handles synthesis adequately.
 
-**Conditional escalation for issues:** Use Opus for Limitations & Improvements analysis when a module's complexity is rated High, or when the module exceeds 1000 LOC, or when it involves concurrency or shared mutable state. Use Sonnet for Low/Medium complexity modules. The Pass 1 extraction agent reports these as an `escalate` flag in its receipt, but **do not take that flag at face value**: recompute `escalate OR loc > 1000 OR complexity == "high"` from the receipt's own fields. The two objective conditions are already in the receipt, and on the first live run a Haiku agent returned `loc: 1682` with `escalate: false` — only the subjective concurrency/security judgment needs trusting.
+**Conditional escalation for issues:** Use Opus for Limitations & Improvements analysis when a module's complexity is rated High, when the module exceeds 1000 LOC, when it involves concurrency or shared mutable state, or when its primary language is a shell language. Use Sonnet for Low/Medium complexity modules. The Pass 1 extraction agent reports the judgment conditions as an `escalate` flag in its receipt, but **do not take that flag at face value**: recompute `escalate OR loc > 1000 OR complexity == "high" OR language ∈ {bash, sh, zsh, shell, powershell}` from the receipt's own fields. The three objective conditions are already in the receipt, and on live runs a Haiku agent returned `loc: 1682` with `escalate: false`, and rated a shell module that splices paths into interpolated program text `escalate: false, complexity: low`. Only the subjective concurrency judgment needs trusting — and only to *add* escalation.
 
 ---
 
@@ -70,7 +70,7 @@ Read `../code-to-docs-references/analysis-guide.md` for detailed instructions.
 2. Identify independent modules, recording each one's name, slug, and root paths — these become durable wikilink and lookup identities in `module_index`. Roots are a **list** and may be shared between modules; file-level ownership in `files_analyzed` is what distinguishes them
 3. Dispatch parallel analysis agents (MUST parallelize if 3+ modules):
    - **Haiku agents** extract sections 1-6 (architecture, API, patterns, dependencies, complexity, key files), **write them to `_state/modules/<slug>.md`**, and return a receipt (report path, purpose, roots, complexity, LOC, `file_count`, deps, `escalate` flag — **not** the file list, which goes in the report's `files:` frontmatter)
-   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements). Each is given the **path** to its module's report, reads it itself, **appends** section 7 to that same file, and returns structured issue records. Tier comes from `escalate_final` = `escalate OR loc > 1000 OR complexity == "high"`, recomputed from the receipt — never the raw flag alone.
+   - **Sonnet or Opus agents** then produce section 7 (limitations & improvements). Each is given the **path** to its module's report, reads it itself, **appends** section 7 to that same file, and returns structured issue records. Tier comes from `escalate_final` = `escalate OR loc > 1000 OR complexity == "high" OR language ∈ {bash, sh, zsh, shell, powershell}`, recomputed from the receipt — never the raw flag alone.
 4. Synthesize from the receipts (not the reports) into a dependency graph and architecture narrative — **Sonnet agent** for ≤4 tree-shaped modules, **Opus agent** for 5+ modules or complex dependency graphs — and write `_state/synthesis.md` plus a receipt carrying `architecture_type` and `system_patterns`
 5. Write `_state/analysis.json` from the receipts (Haiku agent — mechanical data transform)
 
@@ -121,9 +121,11 @@ Dispatch in parallel where possible:
 16. Re-deriving a Pass 2 tier by reading the report's prose instead of recomputing `escalate_final` from the receipt's fields
 17. Reading back a file an agent just wrote in order to verify it — completeness is checked by counting `<!-- c2d:sN -->` markers and by the Phase 3 verification agent
 18. **Addressing an artifact section by its heading text** instead of its `<!-- c2d:sN -->` marker — report prose quotes heading names, so heading counts give false passes
-19. **Taking a Pass 1 receipt's `escalate` at face value** — recompute `escalate OR loc > 1000 OR complexity == "high"`; extraction runs at the cheapest tier and should not be the sole arbiter of arithmetic
-20. **Accepting `deps` entries that are not exact module names** — file paths, directory names, or external commands there become phantom nodes in the dependency graph and broken wikilinks in the Canvas
-21. **Analyzing a directory that is itself a generated vault** — check for `_state/analysis.json` or `generated-by: code-to-docs` frontmatter and exclude it, or the skill will document its own output as source
+19. **Matching a marker as a bare substring** instead of anchored to a whole line (`^<!-- c2d:s[1-7] -->$`) — report prose quotes marker strings too, so a loose count over-reports and condemns a healthy report as damaged
+20. **Taking a Pass 1 receipt's `escalate` at face value** — recompute `escalate_final` from the receipt's own fields; extraction runs at the cheapest tier and should not be the sole arbiter of arithmetic, nor of whether shell code is security-sensitive
+21. **Accepting `deps` entries that are not exact module names** — file paths, directory names, or external commands there become phantom nodes in the dependency graph and broken wikilinks in the Canvas
+22. **Analyzing a directory that is itself a generated vault** — check for `_state/analysis.json` or `generated-by: code-to-docs` frontmatter and exclude it, or the skill will document its own output as source
+23. **Verifying wikilinks without first stripping code fences and inline code spans** — bash's test syntax is `[[ ... ]]`, and the mandated `> [!warning]` callout style nests fences inside blockquotes, writing them as ```` > ```bash ````, so a fence detector that requires the backticks at the very start of the line never toggles. On a live run this made 21% of all `[[…]]` tokens false positives (see `../code-to-docs-references/analysis-guide.md` "What counts as a wikilink")
 
 ---
 

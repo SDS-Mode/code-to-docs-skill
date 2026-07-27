@@ -54,9 +54,9 @@ A **module** is an independent subsystem that can be understood without reading 
 
 | Field | Content |
 |---|---|
-| Name | Title Case label (e.g., Auth, Payments, Worker Queue) |
+| Name | Title Case label (e.g., Auth, Payments, Worker Queue). **Write `and`, never `&`** — and likewise avoid smart quotes, en-dashes and non-breaking spaces. The name becomes a filename and the text of every `[[wikilink]]` pointing at it, and agents silently "tidy" an ampersand into `and` when writing links, inconsistently. Normalise here, at identification time, so no later agent has the chance. `Packaging and Release`, not `Packaging & Release` |
 | Purpose | One sentence, under 20 words — what the module is for. Becomes the wikilink context every later agent uses |
-| Slug | Name lowercased, non-alphanumerics collapsed to single hyphens (`Worker Queue` → `worker-queue`, `Packaging & Release` → `packaging-release`) |
+| Slug | Name lowercased, non-alphanumerics collapsed to single hyphens (`Worker Queue` → `worker-queue`, `Packaging and Release` → `packaging-and-release`) |
 | Root paths | **List** of the narrowest directories covering this module's files, relative to repo root |
 | Language | Primary language of this module |
 | Entry points | Files that are the module's public surface (index, main, exports) |
@@ -85,7 +85,7 @@ Every `Agent()` call in Phase 1 MUST set `model:` to match this table.
 | Issue Analysis (×N) | **sonnet** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | `escalate_final` false |
 | Issue Analysis (×N) | **opus** | `_state/modules/<slug>.md` path | appends §7 to that file | issue records | `escalate_final` true |
 
-`escalate_final` is **not** the receipt's raw `escalate` flag — it is `escalate OR loc > 1000 OR complexity == "high"`, recomputed by the orchestrator. See "Model selection for Pass 2" below for why.
+`escalate_final` is **not** the receipt's raw `escalate` flag — it is `escalate OR loc > 1000 OR complexity == "high" OR language ∈ {bash, sh, zsh, shell, powershell}`, recomputed by the orchestrator. See "Model selection for Pass 2" below for why.
 | Synthesis | **sonnet** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | ≤4 modules, tree-shaped deps |
 | Synthesis | **opus** | extraction receipts + report paths | `_state/synthesis.md` | synthesis receipt | 5+ modules or cyclic deps |
 | State file write | **haiku** | receipts (inline) + report paths for `files:` | `_state/analysis.json` | confirmation | always |
@@ -144,7 +144,7 @@ Work in this order:
 
 Write your findings to the report path given above, overwriting it if it exists. The file has this exact frontmatter followed by exactly the six sections below.
 
-**Each section is preceded by an HTML-comment marker (`<!-- c2d:sN -->`). Emit the markers exactly as shown.** They are how a later agent locates one section without reading the whole file, and they must each appear exactly once in the file.
+**Each section is preceded by an HTML-comment marker (`<!-- c2d:sN -->`). Emit the markers exactly as shown, each alone on its own line** with nothing before or after it — they are matched anchored, as `^<!-- c2d:s[1-7] -->$`. They are how a later agent locates one section without reading the whole file, and they must each appear exactly once in the file.
 
 **If your prose needs to mention one of these section names** — for example when documenting a schema that defines them — write it inline in backticks (`` `### Dependencies` ``), never as a real heading, and never emit a `<!-- c2d:` marker inside prose. A duplicated heading or marker makes the section unaddressable and silently corrupts the report.
 
@@ -236,7 +236,7 @@ Otherwise set `escalate` to false and `escalate_reason` to null. Keep `escalate_
 |-------|---------------|
 | `report` | The Pass 2 prompt is a path, not a pasted report |
 | `deps` | The dependency graph builds from receipts alone — no report reads during synthesis |
-| `escalate` / `escalate_reason` | Resolves the Pass 2 model tier without the orchestrator reading the report's Complexity and Architecture prose to judge it. The agent that read the code makes the call |
+| `escalate` / `escalate_reason` | Feeds the Pass 2 model tier without the orchestrator reading the report's Complexity and Architecture prose to judge it. The agent that read the code makes the *subjective* call; the orchestrator recomputes the objective ones and ORs them in, so this flag can only add escalation, never withhold it |
 | `purpose` | Populates `module_index`, which is the single source for module one-liners — used as wikilink context by module-doc writers and as digest's module inventory, so neither ever opens a report |
 | `roots` / `entry_points` / `language` / `complexity` / `loc` | Populate `module_index` directly |
 | `file_count` | A sanity check only. The **file list itself lives in the report frontmatter**, not here |
@@ -260,6 +260,7 @@ The agent **appends** section 7 to the same report file and returns structured i
 escalate_final =  receipt.escalate
               OR  receipt.loc > 1000
               OR  receipt.complexity == "high"
+              OR  receipt.language ∈ {bash, sh, zsh, shell, powershell}
 ```
 
 | `escalate_final` | Model |
@@ -267,11 +268,20 @@ escalate_final =  receipt.escalate
 | true | Opus |
 | false | Sonnet |
 
-**Why the recomputation.** Two of the three escalation conditions are objective and are *already in the receipt* — LOC and the complexity rating. The third (concurrency, shared mutable state, security-sensitive logic) is a judgment only the agent that read the code can make, so that one is taken on trust. Recomputing the objective two costs nothing and closes a real failure: on the first live run of this pipeline, a Haiku agent reported `loc: 1682` and `escalate: false` in the same receipt, which would have sent the largest and densest module in the codebase to Sonnet. Extraction agents are the cheapest tier by design; do not make them the sole arbiter of arithmetic.
+**Why the recomputation.** Three of the four conditions are objective and are *already in the receipt* — LOC, the complexity rating, and the primary language. Only the middle of `receipt.escalate` (concurrency, shared mutable state, security-sensitive logic) is a judgment that requires having read the code, so that one is taken on trust — but it is taken as a signal that can only *add* escalation, never as permission to skip it.
+
+Recomputing the objective conditions costs nothing and closes two real failures observed on live runs of this pipeline:
+
+- **Arithmetic.** A Haiku agent reported `loc: 1682` and `escalate: false` in the same receipt, which would have sent the largest and densest module in the codebase to Sonnet. A second run reported `loc: 1769 / complexity: low / escalate: false` for the same module. Extraction agents are the cheapest tier by design; do not make them the sole arbiter of arithmetic.
+- **Security judgment.** A module consisting of shell scripts that write user configuration files and interpolate paths into `python3 -c` program text — shell escaping and user-config writing, both explicitly named in the escalation criteria above — returned `escalate: false, complexity: low, loc: 298`, routing to Sonnet. Sonnet happened to find the command injection anyway, so this was a latent gap rather than a demonstrated miss, but the routing was wrong on the criteria as written.
+
+**Why primary language is the proxy for the security condition.** The security criterion is the one an extraction agent is least able to apply to its own output: recognising that quoting a variable into an interpolated string is an injection sink is exactly the reasoning the escalation exists to buy, so requiring it *before* escalating is circular. Primary language is the cheapest objective correlate available in the receipt. Shell modules concentrate injection, quoting, word-splitting and `rm -rf` defects that a Sonnet pass finds only opportunistically — in this pipeline's own repository, both shell modules shipped exactly such bugs, and both became security fixes.
+
+This is a deliberate over-approximation and it does cost money: a small shell module that does nothing dangerous still goes to Opus. Accept that. Shell modules are typically few and short, the escalation applies per module rather than per file, and the asymmetry favours it — the downside of an unnecessary Opus pass is a modest bill, while the downside of a missed injection is a vulnerability shipped in a released plugin. Match on the receipt's **primary** `language` field, not on the presence of any `.sh` file in a mixed module, so a repository that merely keeps a build script does not escalate every module that contains one.
 
 Still **do not re-derive the tier by reading the report's prose** — everything needed is in the receipt. If a receipt is missing or malformed, default to Opus and note it.
 
-**Parse receipts leniently.** Agents wrap JSON in ``` fences and sometimes add a line of preamble despite being told not to. Extract the first JSON object or array in the response rather than requiring a bare value, and if a required field is missing, treat that module as needing Opus rather than guessing.
+**Parse receipts leniently.** Agents wrap JSON in ```` ``` ```` fences and sometimes add a line of preamble despite being told not to. Extract the first JSON object or array in the response rather than requiring a bare value, and if a required field is missing, treat that module as needing Opus rather than guessing.
 
 **Issue Analysis Agent Prompt Template:**
 
@@ -348,9 +358,9 @@ Pass the receipt list inline (they are small) and the report **paths**. Never pa
 
 **Synthesis steps:**
 
-1. **Verify report completeness** — for each module, confirm the report file exists and contains each of the seven `<!-- c2d:sN -->` markers **exactly once**. Grep for the markers, not the headings: report prose legitimately quotes heading names, so counting headings gives false passes. Do not read the files in full. Flag any missing or duplicated marker before proceeding.
+1. **Verify report completeness** — for each module, confirm the report file exists and contains each of the seven `<!-- c2d:sN -->` markers **exactly once**, matched anchored: `grep -cE '^<!-- c2d:s[1-7] -->$' <report>` must return `7`. Grep for the markers, not the headings, and anchor the pattern rather than matching the bare `<!-- c2d:s` substring: report prose legitimately quotes both heading names and marker strings, so counting headings gives false passes and a loose marker count gives false *failures*. Do not read the files in full. Flag any missing or duplicated marker before proceeding.
 2. **Build the cross-module dependency graph** — from the `deps` field of each receipt. Identify cycles or bidirectional dependencies. No report reads are needed for this step.
-3. **Identify system-wide patterns** — patterns that appear in 3+ modules are architectural conventions worth documenting at the top level. Read the `c2d:s3` section of each report rather than the whole file.
+3. **Identify system-wide patterns** — patterns that appear in 3+ modules are architectural conventions worth documenting at the top level. Read the `c2d:s3` section of each report rather than the whole file: from the anchored `^<!-- c2d:s3 -->$` line to the next anchored marker line.
 4. **Resolve naming consistency** — standardize module names if agents used different labels for the same module. Whatever names are settled on here become the wikilink identities for the whole vault and are recorded in `module_index`.
 5. **Determine architecture type** — classify the system as one of: monolith, microservices, modular monolith, plugin-based, or hybrid. Justify the classification.
 6. **Generate the top-level architecture narrative** — a 3–5 paragraph description of the system that a new engineer could read to understand how the pieces fit together.
@@ -579,7 +589,7 @@ Report the auto-selected mode to the user: "Update mode: quick (2 of 8 modules a
 For each affected module, run the same two-pass analysis as baseline, writing to the **same report path** the module already has in `module_index`:
 
 1. **Haiku extraction** (sections 1-6) — same agent prompt template as Step 3 Pass 1. It **overwrites** `_state/modules/<slug>.md`, refreshing `analyzed-at` and `source-commit`.
-2. **Sonnet/Opus issue analysis** (section 7) — same agent prompt template as Step 3 Pass 2, tier chosen from the fresh Pass 1 receipt's `escalate` flag. It **appends** section 7 to the overwritten file.
+2. **Sonnet/Opus issue analysis** (section 7) — same agent prompt template as Step 3 Pass 2, tier chosen by recomputing **`escalate_final`** from the fresh Pass 1 receipt exactly as in Step 3 ("Model selection for Pass 2"). Do **not** branch on the raw `escalate` flag: an update runs the same two-pass analysis as a baseline, so it inherits the same failure — a receipt reporting `loc: 1769 / complexity: low / escalate: false` would send the largest module in the codebase to Sonnet. It **appends** section 7 to the overwritten file.
 
 For **unchanged modules**, carrying forward is a no-op: their report files already sit at known paths with correct frontmatter, and their `module_index` entries are reused verbatim. Do not read them, do not re-summarize them, and do not re-analyze them.
 
@@ -686,7 +696,7 @@ So distinguish two kinds of affected:
 | **affected** | Code changed (or its report is damaged) → re-run Pass 1 + Pass 2, then regenerate its doc | Full two-pass |
 | **relink** | Analysis unchanged, but the doc references a module that was removed or renamed → regenerate the doc **from its existing, untouched report** | One Sonnet doc write, no analysis |
 
-Build the relink set from the `dependency_graph` edges you removed in step 2: any module that had an edge pointing at a deleted module. Add any module whose doc contains a `[[wikilink]]` to a removed title, found by the Step 9 sweep pattern. A module in both sets is simply **affected** — the fuller treatment wins.
+Build the relink set from the `dependency_graph` edges you removed in step 2: any module that had an edge pointing at a deleted module. Add any module whose doc contains a `[[wikilink]]` to a removed title, found with the **exact** Step 9 sweep pattern — `!?\[\[<removed title>([#|][^\]]*)?\]\]`, covering aliased, section, block-reference and embed forms, not just the bare `[[Title]]` (see "[The removed-title sweep pattern](#the-removed-title-sweep-pattern)"). If this step uses a narrower pattern than Step 9, Step 9 finds dangling links that Step 7 was never given the chance to repair. A module in both sets is simply **affected** — the fuller treatment wins.
 
 This is the one case where an unchanged module's doc is legitimately regenerated. State it in the run summary so it does not look like a violation of the preserve rule: `"Regenerated 2 docs to drop links to the removed Scheduler module (analysis unchanged, reports reused)."`
 
@@ -739,9 +749,9 @@ Guard the whole run, not just the write:
 | `source-commit` matches the module's stored `source_commit` | Healthy | Carry forward |
 | `source-commit` disagrees | A previous run was interrupted between Step 5 and Step 8 | Mark **affected**, re-analyze |
 | The file is **missing**, empty, or has no frontmatter | A crashed write, a manual deletion, or a partial checkout | Mark **affected**, re-analyze |
-| A `<!-- c2d:sN -->` marker is missing or appears more than once | An interrupted Pass 2, a Pass 1 that never got its §7, or a report whose prose collided with the format | Mark **affected**, re-analyze |
+| An **anchored** `<!-- c2d:sN -->` marker is missing or appears more than once — `grep -cE '^<!-- c2d:s[1-7] -->$'` ≠ 7 | An interrupted Pass 2, a Pass 1 that never got its §7, or a report whose prose collided with the format | Mark **affected**, re-analyze |
 
-All four checks are frontmatter and marker greps — one line per module, no section bodies. Carrying forward a report that is absent or inconsistent is worse than re-analyzing it: nothing downstream would detect the dead path, and the vault would keep claiming an analysis it does not have.
+All four checks are frontmatter and marker greps — one line per module, no section bodies. **Anchor the marker grep** (`^<!-- c2d:s[1-7] -->$`, never a bare `<!-- c2d:s` substring): a report that documents the marker scheme mentions markers in its prose, and a loose count over-reports, condemning a healthy report as damaged and re-analyzing the module for nothing. See `output-structure.md` "The anchored marker pattern". Carrying forward a report that is absent or inconsistent is worse than re-analyzing it: nothing downstream would detect the dead path, and the vault would keep claiming an analysis it does not have.
 
 ---
 
@@ -749,12 +759,47 @@ All four checks are frontmatter and marker greps — one line per module, no sec
 
 Verification checks two things: every `[[wikilink]]` resolves to an existing file, and every file has complete frontmatter. On a baseline generate run, that means the whole vault — every file is new.
 
+### What counts as a wikilink — exclude code before matching
+
+**A `[[…]]` token inside a code fence or an inline code span is not a link.** Obsidian does not resolve it, and neither may verification. Before matching, strip:
+
+1. **Fenced blocks** — ```` ``` ```` and `~~~` — **after removing any leading blockquote prefix (`> `)**. This is not an edge case: `obsidian-templates.md` §7 *mandates* Code Review Notes as `> [!warning]` callouts, so their fences are written as ```` > ```bash ````, and in any vault documenting shell code every code block is a fence nested inside a blockquote. A fence detector that requires the backticks at the very start of the line never toggles on these, and the whole block is treated as prose.
+2. **Inline code spans**, including multi-backtick spans (`` `x` ``, ``` ``x`` ``` ). Docs about this pipeline quote link syntax constantly.
+
+Then match links as `(?<!!)\[\[([^\]|#]+)` and resolve the captured title.
+
+**Why this is load-bearing.** Bash's test syntax is `[[ ... ]]` — identical to a wikilink. On a live run of this pipeline against its own repository, a vault of 132 wikilink-shaped tokens contained **18** bash conditionals in blockquoted fences and **10** inline-code quotations: 21% of all tokens, none of them links, every one of them resolving to nothing. A verifier that skipped this step would have reported 28 broken links against a vault whose 104 real links all resolved — and the natural response to a 28-link failure is to "fix" documents that were correct.
+
+The failure is asymmetric and favours precision here: a false positive triggers edits to good files, while the real breakage this check exists to catch — a renamed or deleted target — still surfaces, because those links live in prose, not in code blocks.
+
+**Do not "solve" this by asking writers to avoid `[[` in code.** The code being documented is not the vault's to change, and a doc that cannot quote `[[ -z "$REPO" ]]` cannot document a shell script.
+
 On an **update**, a full-vault sweep re-reads files that provably cannot have changed. Only two sets can newly break:
 
 | Set | Why it can break | How to collect it |
 |-----|------------------|-------------------|
 | Files written this run | New or rewritten content can contain a bad link or malformed frontmatter | The generation step already knows exactly which files it wrote — including the relinked docs |
-| Files linking to a **removed** title | An unchanged file's link breaks when its target is deleted or renamed | Only when a module was deleted or renamed: grep the vault for `[[<removed title>]]` |
+| Files linking to a **removed** title | An unchanged file's link breaks when its target is deleted or renamed | Only when a module was deleted or renamed: sweep the vault with the pattern below |
+
+<a id="the-removed-title-sweep-pattern"></a>
+**The sweep pattern must cover every wikilink form, not just the bare one:**
+
+```
+!?\[\[<removed title>([#|][^\]]*)?\]\]
+```
+
+A bare `grep '\[\[<removed title>\]\]'` misses four forms Obsidian treats as links to the same note, and each one dangles just as badly:
+
+| Form | Example |
+|------|---------|
+| Aliased | `[[Scheduler\|the scheduler]]` |
+| Section | `[[Scheduler#Public API]]` |
+| Block reference | `[[Scheduler#^a1b2c3]]` |
+| Embed | `![[Scheduler]]` |
+
+The aliased form is the one that matters most in practice: prose links are written aliased far more often than bare, precisely because a raw title rarely reads well mid-sentence. A sweep that misses it reports **clean** on a vault whose most natural-sounding links are all broken.
+
+Match the title itself literally — escape regex metacharacters in it — and match it case-insensitively only if the vault's filesystem is case-insensitive, as macOS's default is. The same pattern is what Step 7 uses to build the relink set, so the two must stay identical: a link form the sweep can find but the relink set cannot is a guaranteed dangling link, reported and never repaired.
 
 On a deletion the second sweep should come back **clean**, because Step 7 regenerated the relink set specifically to drop those links. A hit here means a dangling link survived — report it as a failure of the relink step, not just as a broken link.
 

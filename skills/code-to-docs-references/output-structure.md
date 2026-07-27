@@ -44,7 +44,7 @@ Dispatch as parallel agents where possible. The Input column is a **reference sp
 | `Cross-Cutting/{Name}.md` (full mode) | **Sonnet** | `_state/synthesis.md` marker `y4` + report paths of the relevant modules | Requires cross-module reasoning |
 | `Documentation.base` | **Haiku** | `module_index` (inline) | Mechanical YAML assembly |
 | `Index.md` | **Haiku** | Project name + timestamp + mode | Template fill (Dataview fallback) |
-| `_state/analysis.json` | **Haiku** | Pass 1 + Pass 2 receipts (inline) + report paths, for the `files:` frontmatter | Mechanical JSON assembly |
+| `_state/analysis.json` | **Haiku** | Pass 1 + Pass 2 receipts (inline), the **synthesis receipt** (`architecture_type`, `system_patterns`), report paths for the `files:` frontmatter, and the run facts the orchestrator alone holds: `project`, `git_commit`, `timestamp`, `mode`, plus the `sessions` entry for this run | Mechanical JSON assembly |
 
 ---
 
@@ -325,16 +325,34 @@ An HTML comment cannot appear in quoted heading text, renders as nothing in Obsi
 
 | Operation | Do this | Not this |
 |-----------|---------|----------|
-| Read one section | Find `<!-- c2d:s4 -->`, read to the next `<!-- c2d:s` | `grep '### Dependencies'` |
-| Check completeness | Count distinct `<!-- c2d:s1 -->`…`<!-- c2d:s7 -->` markers, each exactly once | Count `###` headings |
-| Append §7 | Write `<!-- c2d:s7 -->` then the heading | Write the heading alone |
-| Detect damage | A missing or duplicated marker | A missing heading |
+| Read one section | Find the anchored `<!-- c2d:s4 -->` line, read to the next **anchored** marker line or EOF | `grep '### Dependencies'` |
+| Check completeness | Count **anchored** `<!-- c2d:s1 -->`…`<!-- c2d:s7 -->` lines, each exactly once | Count `###` headings, or count loose `<!-- c2d:s` substrings |
+| Append §7 | Write `<!-- c2d:s7 -->` alone on its own line, then the heading | Write the heading alone |
+| Detect damage | A missing or duplicated **anchored** marker | A missing heading |
+
+<a id="the-anchored-marker-pattern"></a>
+#### The anchored marker pattern
+
+**Every marker match — counting, section boundaries, damage detection — must anchor to a whole line:**
+
+```
+module reports:  ^<!-- c2d:s[1-7] -->$
+synthesis:       ^<!-- c2d:y[1-5] -->$
+```
+
+In practice: `grep -cE '^<!-- c2d:s[1-7] -->$' <report>` must return exactly `7`.
+
+**A substring match is not sufficient, and the prompt guard above is not a substitute for this.** Markers are the machine interface, so the modules most likely to be misparsed are precisely the ones that *document the marker scheme* — their prose contains marker strings as data. Measured on a live run of this pipeline: loose `<!-- c2d:s` counted **8** and **9** on two of six reports whose true section count was 7. Adding the "never write a marker in prose" instruction to the Pass 1 prompt moved those counts from 9 to 7 and 8 — it reduced the error without eliminating it, because it asks a probabilistic writer to never emit a string it is legitimately describing.
+
+The anchor eliminates it structurally instead. A marker quoted in prose is inside backticks, inside a fenced block, or indented in a table cell — none of which can satisfy `^` immediately followed by `<!--` and `-->$`. Keep the prompt guard as well; it reduces reader confusion. But **never rely on it for correctness**, and never let a matcher fall back to a substring because "the guard should have prevented it."
+
+The consequences of getting this wrong are not cosmetic: a spurious count fails the completeness check on a report that is in fact complete, so the update flow's damage detection re-analyzes exactly the modules it just finished analyzing, and "read to the next `<!-- c2d:s`" truncates §1 at a prose mention partway through it.
 
 **Rules:**
 
-- `slug` is the module name lowercased with non-alphanumerics collapsed to single hyphens (`Docker Engine` → `docker-engine`, `Packaging & Release` → `packaging-release`). It must match the `slug` in `module_index` and the values in `files_analyzed`.
+- `slug` is the module name lowercased with non-alphanumerics collapsed to single hyphens (`Docker Engine` → `docker-engine`, `Auth and Security` → `auth-and-security`). It must match the `slug` in `module_index` and the values in `files_analyzed`. Derive it from the **normalised** name — because `&` is removed at identification time (see below), a slug never has an ampersand to collapse, and `Packaging and Release` gives `packaging-and-release`. Deriving a slug from an un-normalised `Packaging & Release` yields `packaging-release`, which is no longer reproducible from the module's own name — every later agent that re-derives the slug looks for the wrong file.
 - `roots` is a **list**, because a module is not always one directory: it may span several (release tooling covering `scripts/` and `.claude-plugin/`), and several logical modules may **share** one directory (a flat `src/lib/server/` holding Docker, Database, and Auth as separate modules — the case `analysis-guide.md` Step 2 calls a "flat structure"). Record the narrowest directories that cover the module's files.
-- The seven `<!-- c2d:sN -->` markers are the addressable interface and must each appear **exactly once**, in order. The `###` headings must accompany them and stay exact for human readers, but nothing machine-readable may depend on heading text alone.
+- The seven `<!-- c2d:sN -->` markers are the addressable interface and must each appear **exactly once**, in order, each alone on its own line so it matches `^<!-- c2d:s[1-7] -->$`. The `###` headings must accompany them and stay exact for human readers, but nothing machine-readable may depend on heading text alone.
 - `source-commit` records the commit the report was extracted from, so an update can tell which reports are stale without re-reading them. `analyzed-at` is refreshed only when the module is actually re-analyzed.
 - On re-analysis, Pass 1 **overwrites** the file (frontmatter + sections 1–6) and Pass 2 **appends** section 7. Never partially patch a report.
 
@@ -371,7 +389,7 @@ source-commit: 5c3f0fc
 | **Cross-Cutting Themes** | Concerns spanning modules (error handling, auth, real-time transport). Seeds `Cross-Cutting/` in full mode |
 | **Issue Themes** | System-wide issue patterns from synthesis step 7 (e.g. "no error-handling strategy across 4 modules") |
 
-The five `<!-- c2d:yN -->` markers are the addressable interface, each appearing exactly once, for the same reason as the module reports — synthesis prose quotes section names too. Address by marker, never by heading text. Rewrite this file in full on every generate or update run — it is cheap and always cross-module.
+The five `<!-- c2d:yN -->` markers are the addressable interface, each appearing exactly once and alone on its own line, for the same reason as the module reports — synthesis prose quotes section names too. Address by marker, never by heading text, and match anchored as `^<!-- c2d:y[1-5] -->$` (see [The anchored marker pattern](#the-anchored-marker-pattern)). Rewrite this file in full on every generate or update run — it is cheap and always cross-module.
 
 **One-line module purposes deliberately live in `module_index`, not here.** They are needed by module-doc writers, by the Onboarding agents, and by digest's module inventory — keeping the single copy in the state file means none of those has to open `synthesis.md`, and an update never has to read the previous synthesis back in order to preserve the purposes of modules it did not touch.
 
