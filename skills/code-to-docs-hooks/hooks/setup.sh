@@ -67,14 +67,21 @@ hooks = settings.setdefault("hooks", {})
 replaced = False
 for event, handler in new_handlers.items():
     existing = hooks.setdefault(event, [])
-    # Drop any prior code-to-docs handler for this event, then append the fresh one, so a re-run
-    # with a new vault path updates the command instead of silently doing nothing.
-    before = len(existing)
-    existing[:] = [
-        h for h in existing
-        if not any(hook.get("source") == "code-to-docs" for hook in h.get("hooks", []))
-    ]
-    if len(existing) != before:
+    # Drop any prior code-to-docs hook for this event, then append the fresh one, so a re-run with
+    # a new vault path updates the command instead of silently doing nothing.
+    #
+    # Filter WITHIN each handler group, not at the group level: a group is dropped only once we
+    # have emptied it. Discarding a whole group because one hook in it was ours would delete hooks
+    # the user added alongside it — and setup.sh's own closing message tells them to hand-edit
+    # this file.
+    dropped = 0
+    for h in existing:
+        entries = h.get("hooks", [])
+        kept = [k for k in entries if k.get("source") != "code-to-docs"]
+        dropped += len(entries) - len(kept)
+        h["hooks"] = kept
+    existing[:] = [h for h in existing if h.get("hooks")]
+    if dropped:
         replaced = True
     existing.append(handler)
 
