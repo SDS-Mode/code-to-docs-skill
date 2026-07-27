@@ -2,6 +2,24 @@
 
 All notable changes to the code-to-docs skill are documented in this file.
 
+## 2026-07-26
+
+Release-tooling fixes found by running the documentation pipeline over this repository's own source, then reproduced against a scratch repo with a local origin and a stubbed `gh`.
+
+### Fixed
+
+- **`bump.sh` aborted after the tag was public.** `PREV_TAG=$(git tag --sort=-v:refname | grep -v "v$NEW_VERSION" | head -1)` runs *after* the tag is pushed. When the new tag is the repo's only tag, `grep -v` matches nothing and exits 1, `pipefail` promotes that to the pipeline's status and `set -e` ends the run — leaving a public tag with no GitHub release and no error explaining why. The first-release `else` branch below it was therefore unreachable dead code. Release notes are now computed *before* anything is published, which also removes the need to filter the new tag at all: the newest existing tag is by definition the previous release.
+- **Nothing prevented releasing from a feature branch.** The documented invariant is "release from `main` after the PR merges," on the reasoning that the branch push would fail preflight. It does not — the push is bare and mid-flight, and on a feature branch with an upstream it succeeds, after which the script tags an unmerged commit and publishes a release from it. Preflight now requires the default branch and a checkout that is not behind origin.
+- **No rollback between pushing the tag and creating the release.** Any failure in that window — a `gh` rate limit, an expired token, insufficient permission, a network drop — left an orphaned public tag that also blocks a naive re-run at `git tag`. That window is now covered by a trap that deletes the tag locally and on origin, and reports the state that remains.
+- **`rm -rf` under a guard that cannot fire.** `${LOCAL_SKILLS_ROOT:?}` fires only when the variable is unset or empty; under `set -u` an unset `HOME` already aborts earlier, while a `HOME` that is *set but empty* — routine in cron, containers and `env -i` — yields `/.claude/skills`, which is non-empty and passes the guard. The property is now asserted directly.
+- **An empty `skills/` created a directory literally named `*`.** Without `nullglob` the unmatched pattern is passed through, so the mirror loop ran once with `dir='*'`, created that directory in the user's skills dir, then aborted on the nonexistent source — with the manifest already bumped.
+- **Weak input validation.** The repo slug was only checked for containing a slash, so `ssh://`, GitHub Enterprise and non-GitHub remotes passed and failed later at `gh release create`; `[0-9]*` accepted `1`, `1.2.3.4` and `9junk` as versions; and a tag collision surfaced only at `git tag`, after the manifest and `$HOME` had been rewritten. All three are now preflight checks with shape assertions.
+
+### Changed
+
+- The confirmation prompt names what it authorizes — which directories under `~/.claude/skills/` will be replaced, and that both the tag and the release are public — and accepts `yes` as well as `y`. It was previously a bare "Proceed?" that rejected `yes`.
+- A manifest version ahead of the newest tag is now reported: it means versions were bumped but never released, so the notes span more than one release.
+
 ## 2026-07-22
 
 ### Changed
