@@ -8,7 +8,7 @@
       "name": "code-to-docs",
       "source": "./",
       "description": "Analyze a codebase and generate an Obsidian-native documentation vault — architecture diagrams, API references, a codebase health assessment, and teaching-focused explanations at three audience levels — then keep it current with incremental git-diff updates and read-only session digests.",
-      "version": "0.4.0"
+      "version": "0.5.0"
     }
   ]
 }
