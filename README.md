@@ -29,7 +29,7 @@ flowchart TB
 
 <sub>Boxes are colored by model tier — <b>Haiku</b> (blue) extraction and mechanical · <b>Sonnet</b> (green) writing · <b>Opus</b> (violet) reasoning · gray = orchestrator. Opus runs only for synthesis; Haiku does the bulk.</sub>
 
-**Architecture** — four command skills share a contract layer (Reference Library) and are coupled by one state file, the *incremental contract* that lets `update` and `digest` work without re-reading everything:
+**Architecture** — four command skills share a contract layer (Reference Library) and are coupled by the `_state/` artifacts, the *incremental contract* that lets `update` and `digest` work without re-reading everything. `analysis.json` indexes what is known; the analysis reports and synthesis sit beside it so agents can be handed a path instead of a payload:
 
 ```mermaid
 %%{init: {'theme':'base','flowchart':{'padding':10},'themeVariables':{'fontSize':'14px','lineColor':'#8a8a8a','edgeLabelBackground':'#ffffff'}}}%%
@@ -39,12 +39,12 @@ graph TD
   DIG["Digest"]:::skill
   HOOK["Hooks"]:::skill
   REF["Reference Library<br/>contract · templates · dispatch tables"]:::ref
-  STATE[("_state/analysis.json<br/>incremental contract")]:::state
+  STATE[("_state/ — incremental contract<br/>analysis.json · index<br/>modules/{slug}.md · reports<br/>synthesis.md · cross-module")]:::state
   GEN -. load .-> REF
   UPD -. load .-> REF
   DIG -. load .-> REF
   GEN -- writes --> STATE
-  UPD -- reads + writes --> STATE
+  UPD -- "reads · rewrites changed" --> STATE
   DIG -- reads --> STATE
   HOOK -- triggers --> DIG
   HOOK -- hints --> UPD
@@ -52,6 +52,8 @@ graph TD
   classDef ref fill:#efecfa,stroke:#4a3aa7,color:#0b0b0b
   classDef state fill:#e6f6ef,stroke:#1baf7a,color:#0b0b0b
 ```
+
+<sub>Agents are handed paths into <code>_state/</code> rather than pasted content — the reports and synthesis exist so there is always a file to point at. <code>update</code> rewrites only the reports of modules that changed; <code>digest</code> is strictly read-only.</sub>
 
 ## What It Does
 
@@ -222,8 +224,10 @@ Hooks are:
 
 ```
 docs-vault/
-├── _state/
-│   └── analysis.json           # State: modules, deps, issues, session history
+├── _state/                     # Skill internals — the incremental contract
+│   ├── analysis.json           # Index: modules, roots, deps, issues, session history
+│   ├── modules/{slug}.md       # Per-module 7-section analysis report
+│   └── synthesis.md            # Cross-module synthesis facts
 ├── Architecture/
 │   ├── System Overview.md      # Mermaid diagrams + narrative
 │   ├── Dependency Map.md       # Cross-module dependencies
@@ -241,12 +245,16 @@ docs-vault/
 └── Index.md                    # Dataview queries (fallback for non-Bases users)
 ```
 
-The `_state/analysis.json` file tracks:
-- Module list and dependency graph
-- Files analyzed with hashes (for change detection)
-- Git commit hash and timestamp (for `:update` diffs)
+The `_state/` directory is the **incremental contract** — skill internals, not reader-facing docs. It is what lets `:update` re-document only what changed and `:digest` load context without re-reading the codebase.
+
+`analysis.json` is the index:
+- Module list plus a **module index** — each module's slug, root paths, entry points, complexity, LOC, and report path
+- File ownership map (each analyzed file → its owning module) for mapping a `git diff` to affected modules by lookup
+- Git commit hash and timestamp, globally and per module (so `:update` knows which reports are stale)
 - Issues array with open/resolved status (for health tracking across runs)
-- Sessions array logging every generate/update/digest event
+- Sessions array logging every generate/update event
+
+`modules/{slug}.md` and `synthesis.md` hold the analysis itself — the seven-section report per module, and the cross-module narrative, patterns, and one-line module purposes. Keeping them on disk is what makes an update cheap: an unchanged module is carried forward by *leaving its report alone*, and every generation agent is handed a **path** rather than a pasted payload.
 
 ## How It Works
 
@@ -254,10 +262,10 @@ The `_state/analysis.json` file tracks:
 
 **Phase 1 — Analysis (two-pass):**
 1. Surveys the codebase — entry points, config files, directory structure
-2. Identifies independent modules
-3. **Pass 1** — dispatches parallel **Haiku** agents to extract structure (architecture, API, patterns, dependencies, complexity, key files)
-4. **Pass 2** — dispatches **Sonnet/Opus** agents to identify limitations and improvements, receiving the Haiku output as input (no re-reading code)
-5. Synthesizes into dependency graph, architecture narrative, and aggregated issues
+2. Identifies independent modules, fixing each one's name, slug, and root paths as durable identities
+3. **Pass 1** — dispatches parallel **Haiku** agents to extract structure (architecture, API, patterns, dependencies, complexity, key files). Each agent **writes its report to `_state/modules/{slug}.md`** and returns a short receipt
+4. **Pass 2** — dispatches **Sonnet/Opus** agents to identify limitations and improvements. Each gets the **path** to its module's report, appends its findings to that file, and returns structured issue records. No re-reading code, and no re-pasting the report
+5. Synthesizes from the receipts into a dependency graph, architecture narrative, and aggregated issues, writing `_state/synthesis.md`
 
 **Phase 2 — Generation (parallel):**
 
@@ -266,21 +274,27 @@ If the `obsidian` CLI is available, uses it for note creation and property manag
 - **Sonnet** agents: module docs (one per module), System Overview, health reports, full-mode extras
 - **Haiku** agents: Canvas, Dependency Map, Documentation.base, Index, state file, Health Summary charts
 
+Every agent receives **references** — a report path, named `synthesis.md` sections, or compact structured data like the dependency graph — never a pasted document.
+
 **Phase 3 — Verification:**
 - **Haiku** agent checks all wikilinks resolve and all files have complete frontmatter
 
-**Cost discipline:** Each phase has a dispatch table specifying the model tier for every agent call. The orchestrator checks the table before dispatching to prevent tier mismatches (e.g., running Haiku-tier extraction at Opus cost).
+**Cost discipline** rests on two rules, both enforced by dispatch tables:
+
+1. **Model tiers** — each phase's table specifies the tier for every agent call, so extraction never runs at Opus cost.
+2. **Pass pointers, not payloads** — the orchestrator runs at Opus, so a document pasted into an agent prompt is charged twice: once as Opus output tokens retyping it, and again in the receiving agent's context. Agents write artifacts and return receipts; downstream agents read by path.
 
 ### Update (`:update`)
 
-1. Reads and **validates** `_state/analysis.json` from existing vault (required fields, types, issue schema)
+1. Reads and **validates** `_state/analysis.json` from existing vault (required fields, types, issue schema); migrates an older-schema vault in place with a one-time Haiku backfill
 2. Runs `git diff <stored_commit>..HEAD` to identify changed files
-3. Maps changed files to affected modules
+3. Maps changed files to affected modules by **lookup** — the file-ownership map and module roots come from state, so there is no re-survey of the codebase
 4. Auto-selects quick or full based on change scope
-5. Re-analyzes only affected modules (two-pass, same as generate)
-6. Merges new results with existing vault — unchanged module docs preserved
-7. Updates state file with new commit, merged issues, session entry
-8. Runs full verification across the entire vault
+5. Re-analyzes only affected modules (two-pass, same as generate), rewriting just their reports
+6. Merges new results with existing vault — unchanged module docs preserved, and unchanged modules carried forward by leaving their reports untouched on disk
+7. Regenerates cross-module docs only when the dependency graph, module purposes, or issue set actually moved, reporting anything it skipped
+8. Updates state file with new commit, merged issues, session entry
+9. Verifies the files it wrote, plus any file linking to a module it removed
 
 ### Digest (`:digest`)
 
@@ -311,11 +325,12 @@ The `examples/` directory contains complete output vaults you can open directly 
 
 ## Pressure Tests
 
-Three test scenarios in `tests/`:
+Four test scenarios in `tests/`:
 
 - `pressure-test-quick-mode.md` — validates quick mode on a 3-5 module codebase
 - `pressure-test-full-mode.md` — validates full mode additions
-- `pressure-test-parallel.md` — validates parallel dispatch discipline on 5+ modules
+- `pressure-test-parallel.md` — validates parallel dispatch and reference-passing discipline on 5+ modules
+- `pressure-test-update.md` — validates that an incremental update touches only what changed, plus older-schema migration
 
 ## Obsidian Integration
 

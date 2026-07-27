@@ -42,7 +42,9 @@ Skill(skill: "code-to-docs:code-to-docs-digest", args: "<vault-path> [--scope <m
 
 2. Validate `_state/analysis.json` against the schema in `../code-to-docs-references/output-structure.md` "State File Validation" section (required fields and types). If the file exists but is malformed or missing required fields, abort with a specific error naming the problem — do **not** partially load or guess. Suggest regenerating with `/code-to-docs:code-to-docs` or `/code-to-docs:code-to-docs-update`.
 
-**Graceful degradation (Steps 2–4):** if any *other* referenced file (System Overview, Dependency Map, System Map, or a `Health/` file) is missing — as happens with partial or older vaults — note its absence in the summary and continue with the files that do exist. Only a missing or invalid `_state/analysis.json` is fatal.
+   An absent `schema_version` or `module_index` is **not** a validation failure — it marks a v1 vault, which digest reads fine via the fallbacks noted below. Digest is read-only, so it never migrates a v1 vault; that is `code-to-docs:code-to-docs-update`'s job.
+
+**Graceful degradation (Steps 2–4):** if any *other* referenced file (System Overview, Dependency Map, System Map, `_state/synthesis.md`, or a `Health/` file) is missing — as happens with partial or older vaults — note its absence in the summary and continue with the files that do exist. Only a missing or invalid `_state/analysis.json` is fatal.
 
 ### Step 2: Load Baseline
 
@@ -60,8 +62,15 @@ Read:
 
 ### Step 4: Load Scoped Modules
 
-- For modules listed in `--scope`: load the full `Modules/{Name}.md`.
-- For all other modules: load only a light overview — the `### What Is This?` paragraph under `## Beginner`, plus the module's frontmatter `complexity`/`status`. Do **not** load the whole `## Beginner` section (prerequisites, key concepts, walkthrough, example) for non-scoped modules — it is far larger than an overview and blows the token budget.
+- For modules listed in `--scope`: load the full `Modules/{Name}.md`. This is the reader-facing doc, which is what a human catching up actually wants.
+- For all other modules: load only a light overview, using the cheapest source available:
+
+| Vault has | Source for non-scoped module overviews |
+|-----------|----------------------------------------|
+| `module_index` (v2) | Each entry's `purpose` and `complexity` — **already loaded in Step 2, so this costs no extra reads at all** |
+| No `module_index` (v1) | Fall back to per-module extraction: the `### What Is This?` paragraph under `## Beginner`, plus frontmatter `complexity`/`status` |
+
+Prefer the v2 path whenever `module_index` is present: the whole non-scoped inventory comes free from a file Step 2 already read, replacing N partial document reads with zero. Do **not** load the whole `## Beginner` section (prerequisites, key concepts, walkthrough, example) for non-scoped modules on either path — it is far larger than an overview and blows the token budget.
 
 ### Step 5: Present Context Summary
 
@@ -79,7 +88,7 @@ These are **soft, best-effort targets** — the skill has no token counter, so t
 
 | Configuration | Soft target | Proxy to stay under it |
 |---------------|-------------|------------------------|
-| Default (no flags) | ~3K tokens | Non-scoped module overviews ≤ ~6 lines each; include only the last ~3 sessions |
+| Default (no flags) | ~3K tokens | Non-scoped module overviews ≤ ~6 lines each (one line each via `module_index`); include only the last ~3 sessions |
 | `--scope` specified | ~6K tokens | Full docs only for scoped modules; ~6-line overviews for the rest |
 | `--focus all` | ~10K tokens | Load all focus files, but truncate the oldest session history first if the summary grows large |
 
@@ -91,7 +100,9 @@ When in doubt, prefer the shorter summary — the user can always pull more in w
 
 Do NOT do any of the following:
 
-- **Writing any files** — this skill is strictly read-only
+- **Writing any files** — this skill is strictly read-only. That includes migrating a v1 state file: read it as-is via the fallbacks and leave it alone
 - **Running generation or analysis** — if the user wants updates, suggest `/code-to-docs:code-to-docs-update` instead
 - **Loading all modules without `--scope` or `--focus all`** — only load overviews by default to stay within token budget
+- **Reading every `Modules/{Name}.md` to build the module inventory** when `module_index` is present — it already carries every module's purpose and complexity, at no extra read
+- **Reading `_state/modules/*.md` reports** — those are analysis internals for generate/update. Digest presents the reader-facing vault
 - **Using a non-Haiku model** — this is a simple read-and-present task; Haiku is sufficient

@@ -120,7 +120,7 @@ Record:
 ### Parallel Dispatch (if 3+ modules)
 
 - [ ] Skill creates exactly N independent analysis agents (N = number of modules)
-- [ ] Each agent receives its module's root path, entry points, and suspected dependencies
+- [ ] Each agent receives its module's root paths, entry points, suspected dependencies, and report write path
 - [ ] Agents run in parallel (not sequentially)
 - [ ] Completion time is roughly time-of-slowest-agent, not sum of all agents
 
@@ -128,36 +128,60 @@ Record:
 
 For each module agent, verify:
 
-- [ ] **Module 1:** Agent completes with structured report
+- [ ] **Module 1:** Agent writes `_state/modules/{slug}.md` and returns a receipt
+  - [ ] Report file exists at the path named in the receipt
   - [ ] Architecture section present (1–2 paragraphs)
-  - [ ] Files section lists all module files
+  - [ ] Key Files section lists the 3–7 most important module files
   - [ ] Dependencies section identifies imports outside module
-  - [ ] Patterns section lists design patterns observed
+  - [ ] Internal Patterns section lists design patterns observed
   - [ ] Complexity assessment provided
   - [ ] Public API section lists exports/entry points
+  - [ ] Report frontmatter has `module`, `slug`, `purpose`, `roots`, `language`, `complexity`, `loc`, `files`, `analyzed-at`, `source-commit`
+  - [ ] Each of the seven `<!-- c2d:sN -->` markers appears **exactly once** — count markers, not `###` headings, since report prose may legitimately quote heading names
 
 - [ ] **Module 2:** (repeat above)
 - [ ] **Module 3:** (repeat above)
 - [ ] **(Module 4, 5: as applicable)**
 
+### Reference-Passing Discipline
+
+This is the cost invariant — check the transcript, not just the output files.
+
+- [ ] Each Pass 1 agent **returns a receipt**, not a report: the return value is a small JSON object (report path, root, entry points, language, complexity, loc, files, deps, `escalate`), not seven sections of prose
+- [ ] Each Pass 2 prompt contains a **path** to `_state/modules/{slug}.md` — no prompt contains a pasted extraction report
+- [ ] Pass 2 model tier matches `escalate OR loc > 1000 OR complexity == "high"` — **recomputed** from the receipt, not the raw `escalate` flag. A receipt reporting `loc: 1682` with `escalate: false` must still get Opus
+- [ ] Every `deps` entry is an exact module name from the project module list — no file paths, no directory names, no external commands like `git` or `sed`
+- [ ] The orchestrator does **not** read back a `_state/modules/*.md` file it just had an agent write
+- [ ] Pass 2 appends `### Limitations & Improvements` to the existing report file — sections 1–6 are still present and unmodified afterward
+- [ ] No Phase 2 agent prompt contains a pasted 7-section report or the full synthesis text
+
 ### Synthesis
 
-- [ ] All agent reports are successfully merged
-- [ ] Dependency graph correctly reflects inter-module calls
+- [ ] Dependency graph correctly reflects inter-module calls, built from receipt `deps` fields
 - [ ] No cycles detected (or cycles are documented with warning)
 - [ ] Synthesis produces a single coherent architecture narrative
+- [ ] `_state/synthesis.md` is written with all five `<!-- c2d:yN -->` markers exactly once: Architecture Narrative, Architecture Type, System-Wide Patterns, Cross-Cutting Themes, Issue Themes
+- [ ] `synthesis.md` does **not** duplicate per-module one-liners — every module's `purpose` lives in `module_index`
 - [ ] `_state/analysis.json` is written to vault root
 
 ### State File Validation
 
 - [ ] `_state/analysis.json` exists
 - [ ] File is valid JSON
-- [ ] Contains fields: `project`, `modules`, `dependency_graph`, `files_analyzed`, `git_commit`, `timestamp`, `mode`
+- [ ] Contains fields: `schema_version`, `project`, `modules`, `module_index`, `dependency_graph`, `architecture_type`, `system_patterns`, `files_analyzed`, `git_commit`, `timestamp`, `mode`, `issues`, `sessions`
+- [ ] `architecture_type` and `system_patterns` match what `_state/synthesis.md` §§ Architecture Type / System-Wide Patterns say — they exist so an update can detect a shift without reading that file
+- [ ] `schema_version` equals `2`
 - [ ] `modules` array lists all identified modules by name
+- [ ] `module_index` has one entry per name in `modules`, and no extra keys
+- [ ] Each `module_index` entry has `slug`, `roots` (non-empty array), `report`, and its `report` path exists on disk
+- [ ] Every `files_analyzed` **value** is a slug appearing in `module_index` — not a hash, not the string `"analyzed"`
+- [ ] A file listed in two reports' `files:` frontmatter appears in `files_analyzed` with **both** owners as an array, and every shared file was named in the run summary — an overwritten owner means that module is never re-analyzed when the file changes
+- [ ] Every `files_analyzed` **key** starts with one of its module's recorded `roots`
 - [ ] `dependency_graph` has entries for each module
 - [ ] `mode` field equals `"quick"`
 - [ ] `git_commit` is set (if codebase is a git repo) or null (otherwise)
 - [ ] `timestamp` is ISO 8601 format
+- [ ] `issues` and `sessions` are present (may be empty arrays, but not omitted)
 
 ---
 
@@ -182,6 +206,8 @@ For each module agent, verify:
 
 - [ ] `Index.md` exists in vault root
 - [ ] `_state/analysis.json` exists in `_state/` subdirectory
+- [ ] `_state/synthesis.md` exists
+- [ ] `_state/modules/` contains exactly one `{slug}.md` per identified module
 
 ### System Overview.md
 
@@ -396,6 +422,26 @@ If **any** of the following occur, the skill has a critical bug:
 - [ ] **Broken wikilinks (targets don't exist)**
   - How to detect: Wikilink in `Modules/A.md` points to `[[Nonexistent Module]]` but no such file exists
   - Impact: Vault is unusable in Obsidian
+  - Status: FAIL
+
+- [ ] **A full analysis report or the full synthesis pasted into an agent prompt**
+  - How to detect: A Pass 2 or Phase 2 agent prompt in the transcript contains multiple `###` report sections, or the architecture narrative text, instead of a `_state/` path
+  - Impact: The core cost regression this design exists to prevent — the payload is charged as Opus output tokens and then again in the agent's context
+  - Status: FAIL
+
+- [ ] **A Pass 1 agent returns its report instead of a receipt**
+  - How to detect: The agent's return value in the transcript is prose with `###` headings rather than a small JSON object
+  - Impact: The report enters the orchestrator's context at Opus for no reason
+  - Status: FAIL
+
+- [ ] **`files_analyzed` values are not module slugs**
+  - How to detect: `jq -r '.files_analyzed | to_entries[0].value' _state/analysis.json` returns a hex hash or the string `"analyzed"`
+  - Impact: Update cannot map a changed file to its module and falls back to re-surveying
+  - Status: FAIL
+
+- [ ] **`module_index` missing, or an entry's `report` path does not exist**
+  - How to detect: `jq -r '.module_index[].report' _state/analysis.json | xargs -I{} test -f {}` fails for any entry
+  - Impact: The incremental contract is broken; the next update cannot carry modules forward
   - Status: FAIL
 
 ### Pattern Violations (Design Issues)
