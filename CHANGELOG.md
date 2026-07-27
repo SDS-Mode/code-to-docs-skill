@@ -4,9 +4,20 @@ All notable changes to the code-to-docs skill are documented in this file.
 
 ## 2026-07-26
 
-Release-tooling fixes found by running the documentation pipeline over this repository's own source, then reproduced against a scratch repo with a local origin and a stubbed `gh`.
+Hook-script and release-tooling fixes, both found by running the documentation pipeline over this repository's own source. The hook fixes were reproduced against scratch fixtures; the release fixes against a scratch repo with a local origin and a stubbed `gh`. Neither was inferred from reading alone.
 
 ### Fixed
+
+**Hook scripts**
+
+- **Code injection in the SessionStart hook** — `digest-on-start.sh` spliced the vault path into a `python3 -c` string literal, so a quote in the path terminated the literal and the remainder was evaluated as Python. Demonstrated end to end: a vault directory named as a payload both executed a side effect and redirected `open()` to a different file than the one the existence guard had checked. The path is now passed as `argv`, matching the discipline `setup.sh` already used.
+- **A hook that misinformed the model it exists to inform** — the same extractor ended in `2>/dev/null || echo "unknown ... 0"`, so *every* failure (a quote in the path, corrupt JSON, schema drift, a missing `python3`) collapsed into a banner of `unknown` values asserting **`Open issues: 0`**. Since that text is injected straight into Claude's context, a vault with open issues was reported as having none. Failures now say so on stdout and print the diagnostic on stderr, and the count is never printed unless it was computed.
+- **Setup and teardown deleted co-located user hooks** — both filtered `.claude/settings.json` at the handler-group level, discarding an entire group when any hook inside it carried `source: "code-to-docs"`. A hook the user had added alongside ours vanished on the next `setup.sh` or `teardown.sh` run, with no backup, contradicting the skill's "other hooks are left untouched" promise while `setup.sh` invited the user to hand-edit the file. Both now filter individual hook objects and drop a group only once it is empty.
+- **Teardown deleted a settings file it never modified** — the empty-file check ran unconditionally, so a pre-existing `.claude/settings.json` containing only `{}` was unlinked while teardown reported removing zero hooks. Deletion is now conditional on having actually removed something, and the counter counts hooks rather than handler groups.
+- **The staleness banner always looked stale** — the stored commit was truncated to 8 characters while the live one came from `git rev-parse --short` (7 in a small repo), so the two never rendered identically even when the vault was current. Both are now 8.
+- **`teardown.sh` built its Python program by shell interpolation** — not exploitable, since the settings path is a constant, but the same construction as the injection above and the opposite convention from `setup.sh`. Converted to `argv`; also dropped the trailing `2>&1` that merged tracebacks into normal output.
+
+**Release tooling**
 
 - **`bump.sh` aborted after the tag was public.** `PREV_TAG=$(git tag --sort=-v:refname | grep -v "v$NEW_VERSION" | head -1)` runs *after* the tag is pushed. When the new tag is the repo's only tag, `grep -v` matches nothing and exits 1, `pipefail` promotes that to the pipeline's status and `set -e` ends the run — leaving a public tag with no GitHub release and no error explaining why. The first-release `else` branch below it was therefore unreachable dead code. Release notes are now computed *before* anything is published, which also removes the need to filter the new tag at all: the newest existing tag is by definition the previous release.
 - **Nothing prevented releasing from a feature branch.** The documented invariant is "release from `main` after the PR merges," on the reasoning that the branch push would fail preflight. It does not — the push is bare and mid-flight, and on a feature branch with an upstream it succeeds, after which the script tags an unmerged commit and publishes a release from it. Preflight now requires the default branch and a checkout that is not behind origin.

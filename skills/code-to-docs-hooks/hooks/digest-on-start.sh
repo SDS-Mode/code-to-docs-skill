@@ -14,23 +14,52 @@ if [[ ! -f "$STATE_FILE" ]]; then
     exit 0
 fi
 
-# Extract key fields from state file (single python3 invocation)
-IFS=$'\t' read -r PROJECT MODULES COMMIT TIMESTAMP MODE ISSUE_COUNT <<< "$(
-    python3 -c "
-import json
-d = json.load(open('$STATE_FILE'))
-project = d.get('project', 'unknown')
-modules = ', '.join(d.get('modules', []))
-commit = (d.get('git_commit') or 'unknown')[:8]
-timestamp = d.get('timestamp', 'unknown')
-mode = d.get('mode', 'unknown')
-issue_count = len([i for i in d.get('issues', []) if i.get('status') == 'open'])
-print(f'{project}\t{modules}\t{commit}\t{timestamp}\t{mode}\t{issue_count}')
-" 2>/dev/null || echo "unknown	unknown	unknown	unknown	unknown	0"
-)"
+# Extract key fields from the state file (single python3 invocation).
+#
+# The path is passed as argv, never interpolated into the program text: bash expands a spliced
+# "$STATE_FILE" before python3 ever parses it, so a quote in the path is a Python syntax error at
+# best and arbitrary code execution at worst. Same argv discipline as setup.sh.
+#
+# A failure here is reported, not swallowed. The previous blanket `2>/dev/null || echo unknown...`
+# fallback asserted "Open issues: 0" for any unreadable vault — worse than saying nothing, because
+# this text is injected straight into Claude's context.
+if ! SUMMARY=$(python3 - "$STATE_FILE" <<'PY'
+import json, sys
 
-# Check staleness
-CURRENT_HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+except (OSError, ValueError) as e:
+    print(f'{type(e).__name__}: {e}', file=sys.stderr)
+    raise SystemExit(2)
+
+def name(m):
+    if isinstance(m, dict):
+        return str(m.get('name') or m.get('slug') or m)
+    return str(m)
+
+issues = [i for i in d.get('issues', []) if isinstance(i, dict)]
+print('\t'.join([
+    str(d.get('project', 'unknown')),
+    ', '.join(name(m) for m in d.get('modules', [])),
+    (d.get('git_commit') or 'unknown')[:8],
+    str(d.get('timestamp', 'unknown')),
+    str(d.get('mode', 'unknown')),
+    str(len([i for i in issues if i.get('status') == 'open'])),
+]))
+PY
+); then
+    echo "[code-to-docs] A vault exists at $VAULT_PATH but its state file could not be read."
+    echo "  $STATE_FILE is unreadable or not valid JSON (diagnostic on stderr)."
+    echo "  Run /code-to-docs:code-to-docs to regenerate it."
+    exit 0
+fi
+
+IFS=$'\t' read -r PROJECT MODULES COMMIT TIMESTAMP MODE ISSUE_COUNT <<< "$SUMMARY"
+
+# Check staleness. Match the stored commit's width (8) so the same commit renders as the same
+# string — `--short` yields 7 in a small repo, which made every session's banner look stale.
+CURRENT_HEAD=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "unknown")
 
 cat <<EOF
 [code-to-docs] Project documentation available for: $PROJECT

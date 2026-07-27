@@ -11,24 +11,32 @@ if [[ ! -f "$PROJECT_SETTINGS" ]]; then
     exit 0
 fi
 
-python3 -c "
-import json
+# The settings path is passed as argv rather than interpolated into the program text, matching
+# setup.sh. It is a constant today, so nothing is exploitable — but the interpolated form is the
+# same construction that made digest-on-start.sh injectable, and it becomes live the moment this
+# path is parameterised.
+python3 - "$PROJECT_SETTINGS" <<'PY'
+import json, os, sys
 
-settings = json.load(open('$PROJECT_SETTINGS'))
+settings_path = sys.argv[1]
+
+with open(settings_path) as f:
+    settings = json.load(f)
+
 hooks = settings.get('hooks', {})
 removed = 0
 
 for event in list(hooks.keys()):
-    original_len = len(hooks[event])
-    hooks[event] = [
-        h for h in hooks[event]
-        if not any(
-            hook.get('source') == 'code-to-docs'
-            for hook in h.get('hooks', [])
-        )
-    ]
-    removed += original_len - len(hooks[event])
-    # Remove empty event arrays
+    # Filter WITHIN each handler group, not at the group level. Dropping a whole group because one
+    # hook in it is ours would delete hooks the user added alongside it — settings.json is a file
+    # SKILL.md invites the user to hand-edit, and SKILL.md promises theirs are left untouched.
+    for handler in hooks[event]:
+        entries = handler.get('hooks', [])
+        kept = [h for h in entries if h.get('source') != 'code-to-docs']
+        removed += len(entries) - len(kept)
+        handler['hooks'] = kept
+    # Drop only groups we emptied, and empty event arrays
+    hooks[event] = [h for h in hooks[event] if h.get('hooks')]
     if not hooks[event]:
         del hooks[event]
 
@@ -36,12 +44,15 @@ for event in list(hooks.keys()):
 if not hooks and 'hooks' in settings:
     del settings['hooks']
 
-# Remove file entirely if empty (only {} left; the empty-hooks key was already deleted above)
-if settings == {}:
-    import os
-    os.remove('$PROJECT_SETTINGS')
-    print(f'Removed {removed} code-to-docs hook(s). Deleted empty $PROJECT_SETTINGS.')
+# Delete the file only if we actually emptied it. A settings.json that was already `{}` before
+# this ran is the user's file, not ours to unlink.
+if removed and settings == {}:
+    os.remove(settings_path)
+    print(f'Removed {removed} code-to-docs hook(s). Deleted now-empty {settings_path}.')
+elif removed:
+    with open(settings_path, 'w') as f:
+        json.dump(settings, f, indent=2)
+    print(f'Removed {removed} code-to-docs hook(s) from {settings_path}.')
 else:
-    json.dump(settings, open('$PROJECT_SETTINGS', 'w'), indent=2)
-    print(f'Removed {removed} code-to-docs hook(s) from $PROJECT_SETTINGS.')
-" 2>&1
+    print(f'No code-to-docs hooks found in {settings_path} — nothing removed.')
+PY
